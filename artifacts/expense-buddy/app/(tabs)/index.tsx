@@ -3,7 +3,6 @@ import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import React, { useCallback } from "react";
 import {
-  FlatList,
   Platform,
   Pressable,
   RefreshControl,
@@ -17,6 +16,7 @@ import { BalanceCard } from "@/components/BalanceCard";
 import { TransactionItem } from "@/components/TransactionItem";
 import { useAuth } from "@/context/AuthContext";
 import { useData } from "@/context/DataContext";
+import { useNotifications } from "@/context/NotificationContext";
 import { useColors } from "@/hooks/useColors";
 
 const QUICK_ACTIONS = [
@@ -32,6 +32,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const { transactions, groups, isLoading, refreshData } = useData();
+  const { unreadCount } = useNotifications();
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const recent = transactions.slice(0, 8);
@@ -58,6 +59,22 @@ export default function HomeScreen() {
       }
     >
       <View style={{ height: topPad + 12 }} />
+
+      {/* Top bar with notification bell */}
+      <View style={styles.topBar}>
+        <View />
+        <Pressable
+          style={[styles.bellBtn, { backgroundColor: colors.card }]}
+          onPress={() => router.push("/notifications")}
+        >
+          <Feather name="bell" size={20} color={colors.text} />
+          {unreadCount > 0 && (
+            <View style={[styles.badge, { backgroundColor: colors.destructive }]}>
+              <Text style={styles.badgeText}>{unreadCount > 9 ? "9+" : unreadCount}</Text>
+            </View>
+          )}
+        </Pressable>
+      </View>
 
       <BalanceCard
         walletBalance={user?.walletBalance ?? 0}
@@ -98,7 +115,7 @@ export default function HomeScreen() {
               <Text style={[styles.seeAll, { color: colors.primary }]}>See all</Text>
             </Pressable>
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, gap: 12 }}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 0, gap: 12 }}>
             {groups.slice(0, 4).map((g) => (
               <Pressable
                 key={g.id}
@@ -119,7 +136,7 @@ export default function HomeScreen() {
       <View style={[styles.section, { paddingHorizontal: 0 }]}>
         <View style={[styles.sectionHeader, { paddingHorizontal: 16 }]}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Recent Activity</Text>
-          <Pressable>
+          <Pressable onPress={() => router.push("/notifications")}>
             <Text style={[styles.seeAll, { color: colors.primary }]}>All</Text>
           </Pressable>
         </View>
@@ -130,7 +147,7 @@ export default function HomeScreen() {
               <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No transactions yet</Text>
             </View>
           ) : (
-            recent.map((tx, i) => (
+            recent.map((tx) => (
               <TransactionItem key={tx.id} transaction={tx} />
             ))
           )}
@@ -142,7 +159,32 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  section: { paddingHorizontal: 16, marginTop: 28 },
+  topBar: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+  bellBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  badge: {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  badgeText: { fontSize: 10, color: "#fff", fontFamily: "Inter_700Bold" },
+  section: { paddingHorizontal: 16, marginTop: 24 },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
   sectionTitle: { fontSize: 18, fontFamily: "Inter_700Bold" },
   seeAll: { fontSize: 13, fontFamily: "Inter_600SemiBold" },

@@ -16,6 +16,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AuthProvider } from "@/context/AuthContext";
 import { DataProvider } from "@/context/DataContext";
+import { NotificationProvider } from "@/context/NotificationContext";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -37,6 +38,10 @@ function RootLayoutNav() {
       />
       <Stack.Screen
         name="send/index"
+        options={{ presentation: "card", headerShown: false }}
+      />
+      <Stack.Screen
+        name="notifications"
         options={{ presentation: "card", headerShown: false }}
       />
     </Stack>
@@ -67,7 +72,9 @@ export default function RootLayout() {
             <KeyboardProvider>
               <AuthProvider>
                 <DataProvider>
-                  <RootLayoutNav />
+                  <NotificationProvider>
+                    <RootLayoutNav />
+                  </NotificationProvider>
                 </DataProvider>
               </AuthProvider>
             </KeyboardProvider>

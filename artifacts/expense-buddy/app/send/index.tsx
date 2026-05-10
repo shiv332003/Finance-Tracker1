@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SplitAfterPaymentModal } from "@/components/SplitAfterPaymentModal";
 import { useData } from "@/context/DataContext";
 import { useColors } from "@/hooks/useColors";
 
@@ -36,6 +37,7 @@ export default function SendScreen() {
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [sending, setSending] = useState(false);
+  const [showSplitModal, setShowSplitModal] = useState(false);
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
 
@@ -56,6 +58,11 @@ export default function SendScreen() {
     } finally {
       setSending(false);
     }
+  };
+
+  const handleDone = () => {
+    setShowSplitModal(false);
+    router.back();
   };
 
   return (
@@ -170,6 +177,28 @@ export default function SendScreen() {
           <Text style={[styles.successTo, { color: colors.mutedForeground }]}>to {selected.name}</Text>
           {note ? <Text style={[styles.successNote, { color: colors.mutedForeground }]}>"{note}"</Text> : null}
 
+          {/* Split prompt */}
+          <View style={[styles.splitPromptCard, { backgroundColor: colors.primary + "14", borderColor: colors.primary + "33" }]}>
+            <View style={styles.splitPromptRow}>
+              <View style={[styles.splitPromptIcon, { backgroundColor: colors.primary + "22" }]}>
+                <Feather name="divide-circle" size={22} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.splitPromptTitle, { color: colors.text }]}>Want to split this?</Text>
+                <Text style={[styles.splitPromptSub, { color: colors.mutedForeground }]}>
+                  Divide ₹{parseFloat(amount).toLocaleString("en-IN")} with your contacts or a group
+                </Text>
+              </View>
+            </View>
+            <Pressable
+              style={[styles.splitYesBtn, { backgroundColor: colors.primary }]}
+              onPress={() => setShowSplitModal(true)}
+            >
+              <Feather name="users" size={14} color="#fff" />
+              <Text style={styles.splitYesBtnText}>Split this payment</Text>
+            </Pressable>
+          </View>
+
           <View style={styles.successActions}>
             <Pressable
               style={[styles.successBtn, { backgroundColor: colors.card }]}
@@ -183,14 +212,22 @@ export default function SendScreen() {
               <Text style={[styles.successBtnText, { color: colors.text }]}>Send Again</Text>
             </Pressable>
             <Pressable
-              style={[styles.successBtn, { backgroundColor: colors.primary }]}
+              style={[styles.successBtn, { backgroundColor: colors.secondary }]}
               onPress={() => router.back()}
             >
-              <Text style={[styles.successBtnText, { color: "#fff" }]}>Done</Text>
+              <Text style={[styles.successBtnText, { color: colors.text }]}>Done</Text>
             </Pressable>
           </View>
         </View>
       )}
+
+      <SplitAfterPaymentModal
+        visible={showSplitModal}
+        onClose={handleDone}
+        amount={parseFloat(amount || "0")}
+        description={note || `Payment to ${selected?.name ?? ""}`}
+        toName={selected?.name}
+      />
     </View>
   );
 }
@@ -258,7 +295,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    gap: 12,
+    gap: 10,
     paddingHorizontal: 24,
   },
   successCircle: {
@@ -267,13 +304,34 @@ const styles = StyleSheet.create({
     borderRadius: 50,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 8,
+    marginBottom: 4,
   },
   successTitle: { fontSize: 22, fontFamily: "Inter_700Bold" },
   successAmount: { fontSize: 44, fontFamily: "Inter_700Bold" },
   successTo: { fontSize: 15, fontFamily: "Inter_400Regular" },
   successNote: { fontSize: 14, fontFamily: "Inter_400Regular", fontStyle: "italic" },
-  successActions: { flexDirection: "row", gap: 12, marginTop: 20 },
+  splitPromptCard: {
+    width: "100%",
+    borderRadius: 16,
+    borderWidth: 1.5,
+    padding: 16,
+    gap: 12,
+    marginTop: 8,
+  },
+  splitPromptRow: { flexDirection: "row", gap: 12, alignItems: "center" },
+  splitPromptIcon: { width: 44, height: 44, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  splitPromptTitle: { fontSize: 15, fontFamily: "Inter_700Bold" },
+  splitPromptSub: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
+  splitYesBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 11,
+    borderRadius: 10,
+  },
+  splitYesBtnText: { color: "#fff", fontSize: 14, fontFamily: "Inter_700Bold" },
+  successActions: { flexDirection: "row", gap: 12, marginTop: 4 },
   successBtn: { flex: 1, paddingVertical: 14, borderRadius: 14, alignItems: "center" },
   successBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
 });

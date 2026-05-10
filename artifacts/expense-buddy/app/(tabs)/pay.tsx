@@ -3,7 +3,6 @@ import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
-  Alert,
   Modal,
   Platform,
   Pressable,
@@ -14,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SplitAfterPaymentModal } from "@/components/SplitAfterPaymentModal";
 import { useData } from "@/context/DataContext";
 import { useColors } from "@/hooks/useColors";
 
@@ -37,9 +37,12 @@ export default function PayScreen() {
   const [note, setNote] = useState("");
   const [success, setSuccess] = useState(false);
   const [showQR, setShowQR] = useState(false);
+  const [showSplitModal, setShowSplitModal] = useState(false);
+  const [lastPaymentAmount, setLastPaymentAmount] = useState(0);
+  const [lastPaymentDesc, setLastPaymentDesc] = useState("");
+  const [lastPaymentTo, setLastPaymentTo] = useState("");
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
-
   const payTxs = transactions.filter((t) => t.type === "sent" || t.type === "received").slice(0, 6);
 
   const handleSend = async () => {
@@ -47,19 +50,30 @@ export default function PayScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     setSending(true);
     try {
-      await sendMoney(selectedContact.name, selectedContact.phone, parseFloat(amount), note);
+      const paid = parseFloat(amount);
+      await sendMoney(selectedContact.name, selectedContact.phone, paid, note);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setLastPaymentAmount(paid);
+      setLastPaymentDesc(note || `Payment to ${selectedContact.name}`);
+      setLastPaymentTo(selectedContact.name);
       setSuccess(true);
-      setTimeout(() => {
-        setSuccess(false);
-        setShowSend(false);
-        setAmount("");
-        setNote("");
-        setSelectedContact(null);
-      }, 2000);
     } finally {
       setSending(false);
     }
+  };
+
+  const handleCloseSend = () => {
+    setSuccess(false);
+    setShowSend(false);
+    setAmount("");
+    setNote("");
+    setSelectedContact(null);
+  };
+
+  const handleSplitFromPayment = () => {
+    setShowSend(false);
+    setSuccess(false);
+    setShowSplitModal(true);
   };
 
   return (
@@ -81,7 +95,7 @@ export default function PayScreen() {
               <Feather name="send" size={24} color="#fff" />
             </View>
             <Text style={styles.bigBtnTitle}>Send Money</Text>
-            <Text style={styles.bigBtnSub}>Transfer to contacts</Text>
+            <Text style={styles.bigBtnSub}>Transfer to contacts · auto-split detection</Text>
           </Pressable>
 
           <View style={styles.secondaryActions}>
@@ -102,9 +116,20 @@ export default function PayScreen() {
           </View>
         </View>
 
-        <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 28, marginBottom: 8 }]}>
-          Send to
-        </Text>
+        {/* Split detection banner */}
+        <View style={[styles.splitBanner, { backgroundColor: colors.primary + "12", borderColor: colors.primary + "30" }]}>
+          <View style={[styles.splitBannerIcon, { backgroundColor: colors.primary + "20" }]}>
+            <MaterialCommunityIcons name="lightning-bolt" size={18} color={colors.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.splitBannerTitle, { color: colors.text }]}>Smart split detection</Text>
+            <Text style={[styles.splitBannerSub, { color: colors.mutedForeground }]}>
+              After every payment, you'll be asked if you want to split it automatically
+            </Text>
+          </View>
+        </View>
+
+        <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 24, marginBottom: 8 }]}>Send to</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
           {CONTACTS.map((c) => (
             <Pressable
@@ -136,12 +161,7 @@ export default function PayScreen() {
                   <Text style={[styles.txPerson, { color: colors.text }]}>{tx.person}</Text>
                   <Text style={[styles.txDate, { color: colors.mutedForeground }]}>{tx.date}</Text>
                 </View>
-                <Text
-                  style={[
-                    styles.txAmount,
-                    { color: tx.type === "received" ? colors.success : colors.destructive },
-                  ]}
-                >
+                <Text style={[styles.txAmount, { color: tx.type === "received" ? colors.success : colors.destructive }]}>
                   {tx.type === "received" ? "+" : "-"}₹{tx.amount.toLocaleString("en-IN")}
                 </Text>
               </View>
@@ -150,6 +170,7 @@ export default function PayScreen() {
         </View>
       </ScrollView>
 
+      {/* Send Money Modal */}
       <Modal visible={showSend} transparent animationType="slide">
         <View style={styles.overlay}>
           <View style={[styles.sheet, { backgroundColor: colors.card }]}>
@@ -162,8 +183,18 @@ export default function PayScreen() {
                 </View>
                 <Text style={[styles.successTitle, { color: colors.text }]}>Payment Sent!</Text>
                 <Text style={[styles.successSub, { color: colors.mutedForeground }]}>
-                  ₹{parseFloat(amount || "0").toLocaleString("en-IN")} sent to {selectedContact?.name}
+                  ₹{lastPaymentAmount.toLocaleString("en-IN")} sent to {selectedContact?.name}
                 </Text>
+                <Pressable
+                  style={[styles.splitAfterBtn, { backgroundColor: colors.primary }]}
+                  onPress={handleSplitFromPayment}
+                >
+                  <Feather name="divide-circle" size={16} color="#fff" />
+                  <Text style={styles.splitAfterBtnText}>Split this payment</Text>
+                </Pressable>
+                <Pressable onPress={handleCloseSend}>
+                  <Text style={[styles.skipText, { color: colors.mutedForeground }]}>No, done</Text>
+                </Pressable>
               </View>
             ) : (
               <>
@@ -235,6 +266,7 @@ export default function PayScreen() {
         </View>
       </Modal>
 
+      {/* QR Modal */}
       <Modal visible={showQR} transparent animationType="fade">
         <View style={styles.overlay}>
           <View style={[styles.qrSheet, { backgroundColor: colors.card }]}>
@@ -244,15 +276,21 @@ export default function PayScreen() {
             </View>
             <Text style={[styles.upiId, { color: colors.primary }]}>expensebuddy@upi</Text>
             <Text style={[styles.qrSub, { color: colors.mutedForeground }]}>Scan to pay using any UPI app</Text>
-            <Pressable
-              style={[styles.sheetBtn, { backgroundColor: colors.primary, marginTop: 4 }]}
-              onPress={() => setShowQR(false)}
-            >
+            <Pressable style={[styles.sheetBtn, { backgroundColor: colors.primary, marginTop: 4 }]} onPress={() => setShowQR(false)}>
               <Text style={[styles.sheetBtnText, { color: "#fff" }]}>Close</Text>
             </Pressable>
           </View>
         </View>
       </Modal>
+
+      {/* Auto-triggered split modal after payment */}
+      <SplitAfterPaymentModal
+        visible={showSplitModal}
+        onClose={() => setShowSplitModal(false)}
+        amount={lastPaymentAmount}
+        description={lastPaymentDesc}
+        toName={lastPaymentTo}
+      />
     </View>
   );
 }
@@ -262,23 +300,25 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 20, paddingBottom: 16 },
   title: { fontSize: 28, fontFamily: "Inter_700Bold" },
   mainActions: { gap: 12, marginTop: 8 },
-  bigBtn: {
-    padding: 24,
-    borderRadius: 20,
-    gap: 8,
-  },
+  bigBtn: { padding: 24, borderRadius: 20, gap: 8 },
   bigBtnIcon: { width: 52, height: 52, borderRadius: 16, alignItems: "center", justifyContent: "center", marginBottom: 4 },
   bigBtnTitle: { color: "#fff", fontSize: 20, fontFamily: "Inter_700Bold" },
-  bigBtnSub: { color: "rgba(255,255,255,0.7)", fontSize: 13, fontFamily: "Inter_400Regular" },
+  bigBtnSub: { color: "rgba(255,255,255,0.7)", fontSize: 12, fontFamily: "Inter_400Regular" },
   secondaryActions: { flexDirection: "row", gap: 12 },
-  secBtn: {
-    flex: 1,
-    alignItems: "center",
-    padding: 20,
-    borderRadius: 16,
-    gap: 8,
-  },
+  secBtn: { flex: 1, alignItems: "center", padding: 20, borderRadius: 16, gap: 8 },
   secBtnLabel: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  splitBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 14,
+  },
+  splitBannerIcon: { width: 38, height: 38, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  splitBannerTitle: { fontSize: 13, fontFamily: "Inter_700Bold" },
+  splitBannerSub: { fontSize: 11, fontFamily: "Inter_400Regular", marginTop: 2, lineHeight: 16 },
   sectionTitle: { fontSize: 18, fontFamily: "Inter_700Bold" },
   contactChip: { alignItems: "center", padding: 12, borderRadius: 14, gap: 8, width: 72 },
   contactAvatar: { width: 44, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center" },
@@ -301,31 +341,20 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: 11, fontFamily: "Inter_500Medium", textTransform: "uppercase", letterSpacing: 0.5 },
   selectChip: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10 },
   chipText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
-  amountRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: 12,
-    borderWidth: 1.5,
-    paddingHorizontal: 14,
-    paddingVertical: 2,
-  },
+  amountRow: { flexDirection: "row", alignItems: "center", borderRadius: 12, borderWidth: 1.5, paddingHorizontal: 14, paddingVertical: 2 },
   rupee: { fontSize: 22, fontFamily: "Inter_600SemiBold", marginRight: 6 },
   amountInput: { flex: 1, fontSize: 28, fontFamily: "Inter_700Bold", paddingVertical: 12 },
-  noteInput: {
-    borderRadius: 12,
-    borderWidth: 1.5,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14,
-    fontFamily: "Inter_400Regular",
-  },
+  noteInput: { borderRadius: 12, borderWidth: 1.5, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14, fontFamily: "Inter_400Regular" },
   sheetActions: { flexDirection: "row", gap: 12 },
   sheetBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: "center" },
   sheetBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
-  successBox: { alignItems: "center", paddingVertical: 24, gap: 14 },
+  successBox: { alignItems: "center", paddingVertical: 8, gap: 12 },
   successCircle: { width: 88, height: 88, borderRadius: 44, alignItems: "center", justifyContent: "center" },
   successTitle: { fontSize: 24, fontFamily: "Inter_700Bold" },
   successSub: { fontSize: 14, fontFamily: "Inter_400Regular", textAlign: "center" },
+  splitAfterBtn: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 13, paddingHorizontal: 24, borderRadius: 12, marginTop: 4 },
+  splitAfterBtnText: { color: "#fff", fontSize: 14, fontFamily: "Inter_700Bold" },
+  skipText: { fontSize: 13, fontFamily: "Inter_400Regular", marginTop: 4 },
   qrSheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 28, gap: 16, alignItems: "center" },
   qrBox: { padding: 20, borderRadius: 20, borderWidth: 1 },
   upiId: { fontSize: 16, fontFamily: "Inter_600SemiBold" },

@@ -78,6 +78,8 @@ interface DataContextType {
   addWalletContribution: (groupId: string, amount: number, by: string) => Promise<void>;
   sendMoney: (toName: string, toPhone: string, amount: number, note: string) => Promise<void>;
   refreshData: () => Promise<void>;
+  addGroupMember: (groupId: string, member: Omit<Member, "contribution">) => Promise<void>;
+  removeGroupMember: (groupId: string, memberId: string) => Promise<void>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -342,13 +344,31 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     await saveTxs([tx, ...transactions]);
   };
 
+  const addGroupMember = async (groupId: string, member: Omit<Member, "contribution">) => {
+    const updated = groups.map((g) => {
+      if (g.id !== groupId) return g;
+      if (g.members.find((m) => m.id === member.id)) return g;
+      return { ...g, members: [...g.members, { ...member, contribution: 0 }] };
+    });
+    await saveGroups(updated);
+  };
+
+  const removeGroupMember = async (groupId: string, memberId: string) => {
+    if (memberId === "me") return;
+    const updated = groups.map((g) => {
+      if (g.id !== groupId) return g;
+      return { ...g, members: g.members.filter((m) => m.id !== memberId) };
+    });
+    await saveGroups(updated);
+  };
+
   const refreshData = async () => {
     await loadData();
   };
 
   return (
     <DataContext.Provider
-      value={{ groups, transactions, isLoading, createGroup, addExpense, settleExpense, addWalletContribution, sendMoney, refreshData }}
+      value={{ groups, transactions, isLoading, createGroup, addExpense, settleExpense, addWalletContribution, sendMoney, refreshData, addGroupMember, removeGroupMember }}
     >
       {children}
     </DataContext.Provider>
