@@ -1,0 +1,422 @@
+Build a fully functional modern fintech-style mobile application named “ExpenseBuddy” focused on bachelors, roommates, hostel students, and group travelers. The app should combine UPI-based payments, smart expense splitting, group expense management, repayment tracking, and shared wallet management into a single ecosystem.
+
+The application should be production-grade, scalable, visually modern, mobile-first, and built using the latest stable technologies and best practices.
+
+====================================================
+TECH STACK REQUIREMENTS
+=======================
+
+Frontend:
+
+* React Native with Expo (latest stable version)
+* TypeScript
+* Expo Router
+* React Query / TanStack Query
+* Zustand for global state management
+* React Hook Form + Zod validation
+* NativeWind / TailwindCSS for styling
+* React Native Reanimated
+* React Native Gesture Handler
+* Axios
+* SecureStore for secure token storage
+
+Backend:
+
+* Spring Boot 3 (latest stable version)
+* Java 21
+* Spring Security with JWT Authentication
+* Spring Data JPA
+* PostgreSQL
+* Redis for caching and session optimization
+* Lombok
+* MapStruct
+* Swagger/OpenAPI documentation
+* Docker support
+* Maven
+
+Realtime & Notifications:
+
+* Firebase Cloud Messaging (FCM)
+* WebSockets/STOMP for live updates
+
+Authentication:
+
+* OTP based mobile authentication
+* JWT access + refresh token system
+
+Payment Integration:
+
+* Razorpay payment gateway integration
+* Simulated UPI workflow
+* QR code scanning support
+
+Analytics:
+
+* Monthly spending analytics
+* Charts and visual summaries
+
+Deployment Ready:
+
+* Frontend prepared for Expo EAS build
+* Backend Dockerized
+* Environment variable support
+* Production-ready folder structure
+
+====================================================
+APPLICATION CORE IDEA
+=====================
+
+The application solves the expense tracking and settlement problems faced by bachelors and group living communities.
+
+Normally:
+
+* one person pays
+* others forget repayments
+* expenses become messy
+* monthly calculations become difficult
+
+This app automates the entire process.
+
+Main concept:
+Whenever a user makes a payment, the app instantly asks:
+“Do you want to split this expense?”
+
+The app then:
+
+* calculates balances
+* tracks repayments
+* updates group expenses
+* sends notifications automatically
+
+The app should combine:
+
+* UPI app experience
+* Splitwise-style group management
+* Shared group wallet system
+* Expense analytics
+
+====================================================
+MAIN FEATURES
+=============
+
+1. AUTHENTICATION SYSTEM
+
+* Mobile number login
+* OTP verification
+* JWT authentication
+* Refresh token handling
+* Secure session persistence
+* Profile management
+* Logout functionality
+
+====================================================
+
+2. HOME DASHBOARD
+   Modern fintech-style dashboard displaying:
+
+* total balance
+* amount owed
+* amount to receive
+* wallet balance
+* recent transactions
+* active groups
+* monthly spending summary
+
+UI should look premium and modern like:
+
+* Google Pay
+* CRED
+* PhonePe
+* Splitwise modern redesign
+
+====================================================
+
+3. UPI PAYMENT SYSTEM
+   Features:
+
+* Send money
+* Receive money
+* QR code scanning
+* Simulated UPI transfer flow
+* Payment success/failure handling
+* Transaction history
+* Transaction details screen
+
+After successful payment:
+Show smart popup:
+“Split this expense with someone?”
+
+====================================================
+
+4. EXPENSE SPLITTING SYSTEM
+   Allow:
+
+* Equal split
+* Percentage split
+* Custom amount split
+
+User can:
+
+* split with individuals
+* split with groups
+
+System automatically:
+
+* calculates balances
+* tracks repayments
+* stores expense history
+
+Create optimized settlement calculations minimizing total transactions.
+
+====================================================
+
+5. GROUP MANAGEMENT SYSTEM
+   Users can:
+
+* Create groups
+* Invite members
+* Join groups
+* Remove members
+* Assign group admins
+
+Group types:
+
+* Flatmates
+* Trips
+* Hostel groups
+* Parties
+* Office lunch groups
+
+Each group should have:
+
+* shared balance
+* expense list
+* settlement list
+* member contribution tracking
+
+====================================================
+
+6. SHARED GROUP WALLET SYSTEM
+   This is the most important feature.
+
+Implement a shared wallet where:
+
+* all group members contribute money
+* wallet balance is common
+* anyone in group can spend wallet money
+* every transaction is tracked transparently
+
+Features:
+
+* wallet contribution
+* wallet transaction history
+* real-time wallet balance updates
+* wallet spending analytics
+
+Security rules:
+
+* configurable spending limit
+* approval for high-value transactions
+* transparent activity log
+
+====================================================
+
+7. SMART NOTIFICATIONS
+   Implement:
+
+* repayment reminders
+* pending settlement alerts
+* low wallet balance notifications
+* group contribution reminders
+
+Use:
+
+* Firebase Cloud Messaging
+* realtime updates
+
+====================================================
+
+8. ANALYTICS SYSTEM
+   Create beautiful analytics dashboards:
+
+* monthly spending charts
+* category-wise spending
+* most active spender
+* group contribution analysis
+* repayment trends
+
+Use modern chart libraries.
+
+====================================================
+
+9. MODERN UI/UX REQUIREMENTS
+   UI must be:
+
+* extremely modern
+* responsive
+* premium fintech style
+* smooth animations
+* dark mode support
+* mobile-first
+
+Include:
+
+* animated cards
+* bottom navigation
+* gesture-based interactions
+* loading skeletons
+* smooth transitions
+
+Use:
+
+* latest UI design patterns
+* glassmorphism where appropriate
+* clean typography
+* modern color palette
+
+====================================================
+
+10. DATABASE DESIGN
+    Create proper normalized database schema.
+
+Tables/entities should include:
+
+* Users
+* Groups
+* GroupMembers
+* Transactions
+* ExpenseSplits
+* Wallets
+* WalletTransactions
+* Notifications
+* RepaymentRecords
+* Categories
+
+Include:
+
+* indexes
+* foreign keys
+* relationships
+* audit timestamps
+
+====================================================
+
+11. SECURITY REQUIREMENTS
+    Implement:
+
+* encrypted API communication
+* JWT security
+* role-based authorization
+* rate limiting
+* secure password/token handling
+* input validation
+* SQL injection prevention
+* CORS configuration
+
+====================================================
+
+12. API REQUIREMENTS
+    Create complete REST APIs for:
+
+* authentication
+* payments
+* groups
+* wallet
+* analytics
+* notifications
+* settlements
+
+Generate Swagger API documentation.
+
+====================================================
+
+13. BACKEND ARCHITECTURE
+    Use clean architecture:
+
+* Controller layer
+* Service layer
+* Repository layer
+* DTOs
+* Exception handling
+* Validation layer
+
+Implement:
+
+* global exception handling
+* logging
+* pagination
+* filtering
+* sorting
+
+====================================================
+
+14. FRONTEND STRUCTURE
+    Create scalable folder structure:
+
+* components
+* screens
+* hooks
+* services
+* store
+* utils
+* constants
+* navigation
+* types
+
+Implement:
+
+* reusable components
+* API abstraction
+* protected routes
+* error boundaries
+
+====================================================
+
+15. EXTRA ADVANCED FEATURES
+    Include:
+
+* realtime balance updates
+* transaction search
+* category tagging
+* recurring expense support
+* expense notes
+* profile avatars
+* optimistic UI updates
+
+====================================================
+
+16. DELIVERABLES REQUIRED
+    Generate:
+
+* complete frontend code
+* complete backend code
+* PostgreSQL schema
+* API documentation
+* environment configuration
+* Docker configuration
+* README setup instructions
+
+====================================================
+
+17. IMPORTANT DEVELOPMENT REQUIREMENTS
+
+* Use latest stable dependencies only
+* Ensure application runs without build errors
+* Use TypeScript everywhere possible
+* Follow production-grade coding standards
+* Create realistic dummy data
+* Include loading/error states
+* Optimize performance
+* Ensure clean and maintainable code
+
+====================================================
+
+18. FINAL GOAL
+    The final application should feel like a real-world startup-grade fintech product combining:
+
+* Google Pay style payments
+* Splitwise style expense splitting
+* Shared group wallet management
+* Modern analytics dashboards
+
+The result should be a fully functional, scalable, modern mobile application suitable for real-world deployment and future expansion.
