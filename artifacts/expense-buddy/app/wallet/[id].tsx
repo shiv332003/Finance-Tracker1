@@ -1,9 +1,8 @@
-import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useMemo, useState } from "react";
 import {
-  Alert,
   Modal,
   Platform,
   Pressable,
@@ -20,6 +19,8 @@ import { useNotifications } from "@/context/NotificationContext";
 import { useColors } from "@/hooks/useColors";
 
 type WalletTab = "overview" | "members" | "transactions" | "analytics" | "settings";
+type SplitStep = "ask" | "choose_type" | "unequal_input" | "confirm";
+type SplitType = "equal" | "unequal";
 
 const CATEGORIES = ["Groceries", "Food", "Utilities", "Transport", "Hotel", "Entertainment", "Shopping", "Other"];
 const CATEGORY_ICONS: Record<string, string> = {
@@ -39,6 +40,12 @@ function formatTs(ts: string) {
   return d.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
+interface LastSpend {
+  amount: number;
+  description: string;
+  category: string;
+}
+
 export default function WalletScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -46,23 +53,39 @@ export default function WalletScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const {
     groups, addWalletContribution, spendFromWallet,
-    updateWalletSettings, updateWalletMember, freezeWallet,
+    updateWalletSettings, updateWalletMember, freezeWallet, addExpense,
   } = useData();
   const { addNotification } = useNotifications();
 
   const group = groups.find((g) => g.id === id);
 
   const [tab, setTab] = useState<WalletTab>("overview");
+
+  // Add Funds
   const [showAddFunds, setShowAddFunds] = useState(false);
-  const [showSpend, setShowSpend] = useState(false);
-  const [showEditMember, setShowEditMember] = useState<WalletMember | null>(null);
   const [fundAmount, setFundAmount] = useState("");
+
+  // Spend
+  const [showSpend, setShowSpend] = useState(false);
   const [spendAmount, setSpendAmount] = useState("");
   const [spendDesc, setSpendDesc] = useState("");
   const [spendCategory, setSpendCategory] = useState("Other");
-  const [txFilter, setTxFilter] = useState<"all" | "credit" | "debit">("all");
+
+  // Post-spend split flow
+  const [showSplitModal, setShowSplitModal] = useState(false);
+  const [splitStep, setSplitStep] = useState<SplitStep>("ask");
+  const [splitType, setSplitType] = useState<SplitType>("equal");
+  const [lastSpend, setLastSpend] = useState<LastSpend | null>(null);
+  const [customSplits, setCustomSplits] = useState<Record<string, string>>({});
+  const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
+
+  // Member edit
+  const [showEditMember, setShowEditMember] = useState<WalletMember | null>(null);
   const [editSpendLimit, setEditSpendLimit] = useState("");
   const [editDailyLimit, setEditDailyLimit] = useState("");
+
+  // Misc
+  const [txFilter, setTxFilter] = useState<"all" | "credit" | "debit">("all");
   const [saving, setSaving] = useState(false);
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
@@ -78,12 +101,8 @@ export default function WalletScreen() {
   const ws = group.walletSettings;
   const isAdmin = group.walletMembers.find((wm) => wm.userId === "me")?.role === "admin";
   const myWalletMember = group.walletMembers.find((wm) => wm.userId === "me");
-  const pct = Math.min((group.walletBalance / group.walletLimit) * 100, 100);
-
-  const filteredTxs = group.walletTransactions.filter((tx) =>
-    txFilter === "all" ? true : tx.type === txFilter
-  );
-
+  const pct = Math.min((group.walletBalance / Math.max(group.walletLimit, 1)) * 100, 100);
+  const filteredTxs = group.walletTransactions.filter((tx) => txFilter === "all" ? true : tx.type === txFilter);
   const totalContributions = group.walletMembers.reduce((s, wm) => s + wm.totalContributed, 0);
   const totalSpent = group.walletMembers.reduce((s, wm) => s + wm.totalSpent, 0);
 
@@ -95,6 +114,73 @@ export default function WalletScreen() {
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   }, [group.walletTransactions]);
 
+  // ─── Split helpers ────────────────────────────────────────────────────────
+  const equalShare = lastSpend && selectedMembers.length > 0
+    ? lastSpend.amount / selectedMembers.length
+    : 0;
+
+  const customTotal = Object.values(customSplits).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+  const customRemaining = lastSpend ? lastSpend.amount - customTotal : 0;
+
+  const openSplitFlow = (spend: LastSpend) => {
+    setLastSpend(spend);
+    setSelectedMembers(group.members.map((m) => m.id));
+    const initSplits: Record<string, string> = {};
+    group.members.forEach((m) => { initSplits[m.id] = ""; });
+    setCustomSplits(initSplits);
+    setSplitStep("ask");
+    setShowSplitModal(true);
+  };
+
+  const toggleMember = (uid: string) => {
+    setSelectedMembers((prev) =>
+      prev.includes(uid) ? prev.filter((x) => x !== uid) : [...prev, uid]
+    );
+  };
+
+  const confirmSplit = async () => {
+    if (!lastSpend || selectedMembers.length === 0) return;
+    setSaving(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+
+    const splits = group.members
+      .filter((m) => selectedMembers.includes(m.id))
+      .map((m) => ({
+        userId: m.id,
+        amount: splitType === "equal" ? equalShare : (parseFloat(customSplits[m.id]) || 0),
+        settled: m.id === "me",
+      }));
+
+    await addExpense({
+      groupId: group.id,
+      title: lastSpend.description,
+      amount: lastSpend.amount,
+      paidBy: "me",
+      paidByName: "You",
+      splits,
+      date: new Date().toISOString().split("T")[0],
+      category: lastSpend.category,
+    });
+
+    // Notify each member their share
+    for (const m of group.members.filter((m) => selectedMembers.includes(m.id) && m.id !== "me")) {
+      const share = splitType === "equal" ? equalShare : (parseFloat(customSplits[m.id]) || 0);
+      await addNotification({
+        type: "split_request",
+        title: `${m.name} owes ₹${share.toFixed(0)}`,
+        body: `Wallet expense "${lastSpend.description}" — ${m.name}'s share is ₹${share.toFixed(0)} (total ₹${lastSpend.amount.toFixed(0)})`,
+        amount: share,
+        groupId: group.id,
+      });
+    }
+
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setSaving(false);
+    setShowSplitModal(false);
+    setSplitStep("ask");
+  };
+
+  // ─── Add Funds ────────────────────────────────────────────────────────────
   const handleAddFunds = async () => {
     if (!fundAmount) return;
     setSaving(true);
@@ -102,9 +188,7 @@ export default function WalletScreen() {
     try {
       const amt = parseFloat(fundAmount);
       const result = await addWalletContribution(group.id, amt, "You", "me");
-      if (!result.success) {
-        Alert.alert("Error", result.error); return;
-      }
+      if (!result.success) { setSaving(false); return; }
       await addNotification({
         type: "payment_received",
         title: `₹${amt.toFixed(0)} added to ${ws.name}`,
@@ -130,6 +214,7 @@ export default function WalletScreen() {
     }
   };
 
+  // ─── Spend (then open split flow) ─────────────────────────────────────────
   const handleSpend = async () => {
     if (!spendAmount || !spendDesc) return;
     setSaving(true);
@@ -138,7 +223,13 @@ export default function WalletScreen() {
       const amt = parseFloat(spendAmount);
       const result = await spendFromWallet(group.id, amt, spendDesc, spendCategory, "You", "me");
       if (!result.success) {
-        Alert.alert("Cannot Process", result.error ?? "Unknown error");
+        await addNotification({
+          type: "reminder",
+          title: "Transaction Blocked",
+          body: result.error ?? "Could not complete wallet transaction",
+          groupId: group.id,
+        });
+        setSaving(false);
         return;
       }
       await addNotification({
@@ -153,15 +244,19 @@ export default function WalletScreen() {
         await addNotification({
           type: "reminder",
           title: "⚠️ Low Wallet Balance",
-          body: `${ws.name} is below ₹${ws.minBalanceAlert}! Current balance: ₹${newBalance.toFixed(0)}`,
+          body: `${ws.name} is below ₹${ws.minBalanceAlert}! Current: ₹${newBalance.toFixed(0)}`,
           amount: newBalance,
           groupId: group.id,
         });
       }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      // Close spend modal, open split flow
+      const spend = { amount: amt, description: spendDesc, category: spendCategory };
       setSpendAmount("");
       setSpendDesc("");
       setShowSpend(false);
+      // Small delay so sheet animates out before split modal animates in
+      setTimeout(() => openSplitFlow(spend), 350);
     } finally {
       setSaving(false);
     }
@@ -261,7 +356,7 @@ export default function WalletScreen() {
         {ws.alertEnabled && group.walletBalance < ws.minBalanceAlert && (
           <View style={styles.alertBanner}>
             <Feather name="alert-triangle" size={12} color="#fff" />
-            <Text style={styles.alertText}>Balance below ₹{ws.minBalanceAlert} alert threshold</Text>
+            <Text style={styles.alertBannerText}>Balance below ₹{ws.minBalanceAlert} alert threshold</Text>
           </View>
         )}
         <View style={styles.heroStats}>
@@ -282,7 +377,7 @@ export default function WalletScreen() {
         </View>
       </View>
 
-      {/* Tabs */}
+      {/* Tab strip */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={styles.tabStrip}>
         {TABS.map((t) => (
           <Pressable
@@ -300,7 +395,7 @@ export default function WalletScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: (Platform.OS === "web" ? 34 : insets.bottom) + 80, paddingTop: 12 }}
       >
-        {/* OVERVIEW TAB */}
+        {/* OVERVIEW */}
         {tab === "overview" && (
           <View style={{ paddingHorizontal: 16, gap: 14 }}>
             <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>RECENT ACTIVITY</Text>
@@ -333,7 +428,7 @@ export default function WalletScreen() {
           </View>
         )}
 
-        {/* MEMBERS TAB */}
+        {/* MEMBERS */}
         {tab === "members" && (
           <View style={{ paddingHorizontal: 16, gap: 10 }}>
             {group.members.map((m) => {
@@ -392,7 +487,7 @@ export default function WalletScreen() {
           </View>
         )}
 
-        {/* TRANSACTIONS TAB */}
+        {/* TRANSACTIONS */}
         {tab === "transactions" && (
           <View style={{ paddingHorizontal: 16, gap: 10 }}>
             <View style={styles.filterRow}>
@@ -438,7 +533,7 @@ export default function WalletScreen() {
           </View>
         )}
 
-        {/* ANALYTICS TAB */}
+        {/* ANALYTICS */}
         {tab === "analytics" && (
           <View style={{ paddingHorizontal: 16, gap: 16 }}>
             <View style={[styles.analyticsCard, { backgroundColor: colors.card }]}>
@@ -466,7 +561,6 @@ export default function WalletScreen() {
                 );
               })}
             </View>
-
             <View style={[styles.analyticsCard, { backgroundColor: colors.card }]}>
               <Text style={[styles.analyticsTitle, { color: colors.text }]}>Spending by Member</Text>
               {group.members.map((m) => {
@@ -492,7 +586,6 @@ export default function WalletScreen() {
               })}
               {totalSpent === 0 && <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No spending yet</Text>}
             </View>
-
             {categorySpending.length > 0 && (
               <View style={[styles.analyticsCard, { backgroundColor: colors.card }]}>
                 <Text style={[styles.analyticsTitle, { color: colors.text }]}>Spending Categories</Text>
@@ -518,7 +611,6 @@ export default function WalletScreen() {
                 })}
               </View>
             )}
-
             <View style={[styles.summaryGrid, { backgroundColor: colors.card }]}>
               <View style={styles.summaryCell}>
                 <Text style={[styles.summaryCellVal, { color: colors.success }]}>₹{totalContributions.toLocaleString("en-IN")}</Text>
@@ -538,7 +630,7 @@ export default function WalletScreen() {
           </View>
         )}
 
-        {/* SETTINGS TAB */}
+        {/* SETTINGS */}
         {tab === "settings" && (
           <View style={{ paddingHorizontal: 16, gap: 12 }}>
             {!isAdmin && (
@@ -547,7 +639,6 @@ export default function WalletScreen() {
                 <Text style={[styles.noAdminText, { color: colors.warning }]}>Only the admin can change settings</Text>
               </View>
             )}
-
             <View style={[styles.settingSection, { backgroundColor: colors.card }]}>
               <Text style={[styles.settingGroupTitle, { color: colors.text }]}>Wallet Info</Text>
               <View style={styles.settingRow}>
@@ -572,7 +663,6 @@ export default function WalletScreen() {
                 />
               </View>
             </View>
-
             <View style={[styles.settingSection, { backgroundColor: colors.card }]}>
               <Text style={[styles.settingGroupTitle, { color: colors.text }]}>Spending Limits</Text>
               <View style={styles.settingRow}>
@@ -591,7 +681,6 @@ export default function WalletScreen() {
                 />
               </View>
             </View>
-
             <View style={[styles.settingSection, { backgroundColor: colors.card }]}>
               <Text style={[styles.settingGroupTitle, { color: colors.text }]}>Low Balance Alert</Text>
               <View style={styles.settingRow}>
@@ -621,7 +710,6 @@ export default function WalletScreen() {
                 </View>
               )}
             </View>
-
             {isAdmin && (
               <View style={[styles.settingSection, { backgroundColor: colors.card }]}>
                 <Text style={[styles.settingGroupTitle, { color: colors.text }]}>Wallet Control</Text>
@@ -642,7 +730,7 @@ export default function WalletScreen() {
         )}
       </ScrollView>
 
-      {/* Add Funds Modal */}
+      {/* ─── Add Funds Modal ───────────────────────────────────────────────── */}
       <Modal visible={showAddFunds} transparent animationType="slide">
         <View style={styles.overlay}>
           <View style={[styles.sheet, { backgroundColor: colors.card }]}>
@@ -672,7 +760,7 @@ export default function WalletScreen() {
                 <Text style={[styles.sheetBtnText, { color: colors.text }]}>Cancel</Text>
               </Pressable>
               <Pressable
-                style={[styles.sheetBtn, { backgroundColor: colors.success, flex: 1.5 }]}
+                style={[styles.sheetBtn, { backgroundColor: colors.success, flex: 1.5, opacity: !fundAmount || saving ? 0.5 : 1 }]}
                 onPress={handleAddFunds}
                 disabled={!fundAmount || saving}
               >
@@ -683,7 +771,7 @@ export default function WalletScreen() {
         </View>
       </Modal>
 
-      {/* Spend Modal */}
+      {/* ─── Spend Modal ────────────────────────────────────────────────────── */}
       <Modal visible={showSpend} transparent animationType="slide">
         <View style={styles.overlay}>
           <View style={[styles.sheet, { backgroundColor: colors.card }]}>
@@ -726,7 +814,7 @@ export default function WalletScreen() {
             </ScrollView>
             {myWalletMember?.spendingLimit ? (
               <Text style={[styles.limitNote, { color: colors.warning }]}>
-                Your spending limit: ₹{myWalletMember.spendingLimit.toLocaleString("en-IN")} per transaction
+                Your limit: ₹{myWalletMember.spendingLimit.toLocaleString("en-IN")} per transaction
               </Text>
             ) : null}
             <View style={styles.sheetActions}>
@@ -734,7 +822,7 @@ export default function WalletScreen() {
                 <Text style={[styles.sheetBtnText, { color: colors.text }]}>Cancel</Text>
               </Pressable>
               <Pressable
-                style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5 }]}
+                style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5, opacity: (!spendAmount || !spendDesc || saving) ? 0.5 : 1 }]}
                 onPress={handleSpend}
                 disabled={!spendAmount || !spendDesc || saving}
               >
@@ -745,7 +833,255 @@ export default function WalletScreen() {
         </View>
       </Modal>
 
-      {/* Edit Member Modal */}
+      {/* ─── Post-Spend Split Modal ──────────────────────────────────────────── */}
+      <Modal visible={showSplitModal} transparent animationType="slide">
+        <View style={styles.overlay}>
+          <View style={[styles.splitSheet, { backgroundColor: colors.card }]}>
+            <View style={[styles.handle, { backgroundColor: colors.border }]} />
+
+            {/* ── Step 1: Ask ── */}
+            {splitStep === "ask" && (
+              <>
+                <View style={[styles.splitSuccessIcon, { backgroundColor: colors.success + "20" }]}>
+                  <Feather name="check-circle" size={32} color={colors.success} />
+                </View>
+                <Text style={[styles.splitAskTitle, { color: colors.text }]}>Payment Successful!</Text>
+                <Text style={[styles.splitAskAmount, { color: colors.success }]}>
+                  ₹{lastSpend?.amount.toLocaleString("en-IN")} spent from {ws.name}
+                </Text>
+                <Text style={[styles.splitAskSubtitle, { color: colors.mutedForeground }]}>
+                  "{lastSpend?.description}"
+                </Text>
+                <View style={[styles.splitPromptCard, { backgroundColor: colors.primary + "14", borderColor: colors.primary + "33" }]}>
+                  <Feather name="users" size={20} color={colors.primary} />
+                  <Text style={[styles.splitPromptText, { color: colors.text }]}>
+                    Split this expense among{" "}
+                    <Text style={{ color: colors.primary, fontFamily: "Inter_700Bold" }}>{group.name}</Text> members?
+                  </Text>
+                </View>
+                <View style={styles.sheetActions}>
+                  <Pressable
+                    style={[styles.sheetBtn, { backgroundColor: colors.secondary }]}
+                    onPress={() => setShowSplitModal(false)}
+                  >
+                    <Text style={[styles.sheetBtnText, { color: colors.text }]}>Skip</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5 }]}
+                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSplitStep("choose_type"); }}
+                  >
+                    <Feather name="divide-circle" size={16} color="#fff" />
+                    <Text style={[styles.sheetBtnText, { color: "#fff" }]}>Yes, Split!</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
+
+            {/* ── Step 2: Choose split type ── */}
+            {splitStep === "choose_type" && (
+              <>
+                <Text style={[styles.splitStepTitle, { color: colors.text }]}>How to split?</Text>
+                <Text style={[styles.splitStepSub, { color: colors.mutedForeground }]}>
+                  ₹{lastSpend?.amount.toLocaleString("en-IN")} · "{lastSpend?.description}"
+                </Text>
+
+                <Text style={[styles.fieldLabel, { color: colors.mutedForeground, marginTop: 4 }]}>Select members to include</Text>
+                <ScrollView style={{ maxHeight: 160 }} showsVerticalScrollIndicator={false}>
+                  {group.members.map((m) => {
+                    const selected = selectedMembers.includes(m.id);
+                    return (
+                      <Pressable
+                        key={m.id}
+                        style={[styles.memberSelectRow, { borderBottomColor: colors.border }]}
+                        onPress={() => toggleMember(m.id)}
+                      >
+                        <View style={[styles.memberSelectAvatar, { backgroundColor: m.color + "22" }]}>
+                          <Text style={[styles.memberSelectInitials, { color: m.color }]}>{m.initials}</Text>
+                        </View>
+                        <Text style={[styles.memberSelectName, { color: colors.text }]}>{m.id === "me" ? "You" : m.name}</Text>
+                        <View style={[styles.checkBox, {
+                          backgroundColor: selected ? colors.primary : "transparent",
+                          borderColor: selected ? colors.primary : colors.border,
+                        }]}>
+                          {selected && <Feather name="check" size={12} color="#fff" />}
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+
+                <View style={styles.splitTypeRow}>
+                  <Pressable
+                    style={[styles.splitTypeCard, {
+                      backgroundColor: splitType === "equal" ? colors.primary : colors.secondary,
+                      borderColor: splitType === "equal" ? colors.primary : colors.border,
+                    }]}
+                    onPress={() => setSplitType("equal")}
+                  >
+                    <Feather name="divide-circle" size={22} color={splitType === "equal" ? "#fff" : colors.mutedForeground} />
+                    <Text style={[styles.splitTypeLabel, { color: splitType === "equal" ? "#fff" : colors.text }]}>Equal Split</Text>
+                    {selectedMembers.length > 0 && (
+                      <Text style={[styles.splitTypeHint, { color: splitType === "equal" ? "rgba(255,255,255,0.75)" : colors.mutedForeground }]}>
+                        ₹{(lastSpend ? lastSpend.amount / selectedMembers.length : 0).toFixed(0)} each
+                      </Text>
+                    )}
+                  </Pressable>
+                  <Pressable
+                    style={[styles.splitTypeCard, {
+                      backgroundColor: splitType === "unequal" ? colors.primary : colors.secondary,
+                      borderColor: splitType === "unequal" ? colors.primary : colors.border,
+                    }]}
+                    onPress={() => setSplitType("unequal")}
+                  >
+                    <Feather name="sliders" size={22} color={splitType === "unequal" ? "#fff" : colors.mutedForeground} />
+                    <Text style={[styles.splitTypeLabel, { color: splitType === "unequal" ? "#fff" : colors.text }]}>Custom Split</Text>
+                    <Text style={[styles.splitTypeHint, { color: splitType === "unequal" ? "rgba(255,255,255,0.75)" : colors.mutedForeground }]}>
+                      Set each person's share
+                    </Text>
+                  </Pressable>
+                </View>
+
+                <View style={styles.sheetActions}>
+                  <Pressable
+                    style={[styles.sheetBtn, { backgroundColor: colors.secondary }]}
+                    onPress={() => setSplitStep("ask")}
+                  >
+                    <Text style={[styles.sheetBtnText, { color: colors.text }]}>Back</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5, opacity: selectedMembers.length === 0 ? 0.4 : 1 }]}
+                    disabled={selectedMembers.length === 0}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      if (splitType === "unequal") {
+                        setSplitStep("unequal_input");
+                      } else {
+                        setSplitStep("confirm");
+                      }
+                    }}
+                  >
+                    <Text style={[styles.sheetBtnText, { color: "#fff" }]}>Next →</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
+
+            {/* ── Step 3a: Unequal custom input ── */}
+            {splitStep === "unequal_input" && (
+              <>
+                <Text style={[styles.splitStepTitle, { color: colors.text }]}>Enter each person's share</Text>
+                <Text style={[styles.splitStepSub, { color: colors.mutedForeground }]}>
+                  Total: ₹{lastSpend?.amount.toLocaleString("en-IN")}
+                </Text>
+                <ScrollView style={{ maxHeight: 260 }} showsVerticalScrollIndicator={false}>
+                  {group.members.filter((m) => selectedMembers.includes(m.id)).map((m) => (
+                    <View key={m.id} style={[styles.unequalRow, { borderBottomColor: colors.border }]}>
+                      <View style={[styles.memberSelectAvatar, { backgroundColor: m.color + "22" }]}>
+                        <Text style={[styles.memberSelectInitials, { color: m.color }]}>{m.initials}</Text>
+                      </View>
+                      <Text style={[styles.unequalName, { color: colors.text }]}>{m.id === "me" ? "You" : m.name}</Text>
+                      <View style={[styles.unequalInputWrap, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+                        <Text style={[styles.unequalRupee, { color: colors.mutedForeground }]}>₹</Text>
+                        <TextInput
+                          style={[styles.unequalInput, { color: colors.text }]}
+                          keyboardType="numeric"
+                          placeholder="0"
+                          placeholderTextColor={colors.mutedForeground}
+                          value={customSplits[m.id] ?? ""}
+                          onChangeText={(v) => setCustomSplits((prev) => ({ ...prev, [m.id]: v }))}
+                        />
+                      </View>
+                    </View>
+                  ))}
+                </ScrollView>
+                <View style={[styles.remainingRow, {
+                  backgroundColor: Math.abs(customRemaining) < 0.5 ? colors.success + "18" : colors.warning + "18",
+                }]}>
+                  <Text style={[styles.remainingLabel, { color: colors.mutedForeground }]}>Remaining unassigned:</Text>
+                  <Text style={[styles.remainingAmt, { color: Math.abs(customRemaining) < 0.5 ? colors.success : colors.warning }]}>
+                    ₹{customRemaining.toFixed(2)}
+                  </Text>
+                </View>
+                <View style={styles.sheetActions}>
+                  <Pressable
+                    style={[styles.sheetBtn, { backgroundColor: colors.secondary }]}
+                    onPress={() => setSplitStep("choose_type")}
+                  >
+                    <Text style={[styles.sheetBtnText, { color: colors.text }]}>Back</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5, opacity: Math.abs(customRemaining) > 0.5 ? 0.4 : 1 }]}
+                    disabled={Math.abs(customRemaining) > 0.5}
+                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSplitStep("confirm"); }}
+                  >
+                    <Text style={[styles.sheetBtnText, { color: "#fff" }]}>Review →</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
+
+            {/* ── Step 4: Confirm ── */}
+            {splitStep === "confirm" && (
+              <>
+                <Text style={[styles.splitStepTitle, { color: colors.text }]}>Confirm Split</Text>
+                <Text style={[styles.splitStepSub, { color: colors.mutedForeground }]}>
+                  "{lastSpend?.description}" · ₹{lastSpend?.amount.toLocaleString("en-IN")}
+                </Text>
+                <View style={[styles.splitSummaryCard, { backgroundColor: colors.accent }]}>
+                  <View style={styles.splitSummaryRow}>
+                    <Text style={[styles.splitSummaryLabel, { color: colors.mutedForeground }]}>Split type</Text>
+                    <Text style={[styles.splitSummaryVal, { color: colors.primary }]}>
+                      {splitType === "equal" ? "Equal" : "Custom"}
+                    </Text>
+                  </View>
+                  <View style={styles.splitSummaryRow}>
+                    <Text style={[styles.splitSummaryLabel, { color: colors.mutedForeground }]}>Members</Text>
+                    <Text style={[styles.splitSummaryVal, { color: colors.text }]}>{selectedMembers.length} people</Text>
+                  </View>
+                </View>
+                <ScrollView style={{ maxHeight: 200 }} showsVerticalScrollIndicator={false}>
+                  {group.members.filter((m) => selectedMembers.includes(m.id)).map((m) => {
+                    const share = splitType === "equal" ? equalShare : (parseFloat(customSplits[m.id]) || 0);
+                    return (
+                      <View key={m.id} style={[styles.confirmRow, { borderBottomColor: colors.border }]}>
+                        <View style={[styles.memberSelectAvatar, { backgroundColor: m.color + "22" }]}>
+                          <Text style={[styles.memberSelectInitials, { color: m.color }]}>{m.initials}</Text>
+                        </View>
+                        <Text style={[styles.confirmName, { color: colors.text }]}>{m.id === "me" ? "You" : m.name}</Text>
+                        <Text style={[styles.confirmShare, { color: colors.primary }]}>₹{share.toFixed(2)}</Text>
+                        {m.id !== "me" && (
+                          <View style={[styles.notifyPill, { backgroundColor: colors.primary + "18" }]}>
+                            <Feather name="bell" size={10} color={colors.primary} />
+                            <Text style={[styles.notifyPillText, { color: colors.primary }]}>Notified</Text>
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+                <View style={styles.sheetActions}>
+                  <Pressable
+                    style={[styles.sheetBtn, { backgroundColor: colors.secondary }]}
+                    onPress={() => setSplitStep(splitType === "equal" ? "choose_type" : "unequal_input")}
+                  >
+                    <Text style={[styles.sheetBtnText, { color: colors.text }]}>Back</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5, opacity: saving ? 0.6 : 1 }]}
+                    onPress={confirmSplit}
+                    disabled={saving}
+                  >
+                    <Feather name="check" size={16} color="#fff" />
+                    <Text style={[styles.sheetBtnText, { color: "#fff" }]}>{saving ? "Saving..." : "Record Split"}</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* ─── Edit Member Modal ───────────────────────────────────────────────── */}
       <Modal visible={!!showEditMember} transparent animationType="slide">
         <View style={styles.overlay}>
           <View style={[styles.sheet, { backgroundColor: colors.card }]}>
@@ -824,7 +1160,7 @@ const styles = StyleSheet.create({
   progressFill: { height: "100%", borderRadius: 4 },
   progressLabel: { fontSize: 12, fontFamily: "Inter_400Regular" },
   alertBanner: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(0,0,0,0.2)", padding: 8, borderRadius: 8 },
-  alertText: { fontSize: 12, color: "#fff", fontFamily: "Inter_500Medium", flex: 1 },
+  alertBannerText: { fontSize: 12, color: "#fff", fontFamily: "Inter_500Medium", flex: 1 },
   heroStats: { flexDirection: "row", marginTop: 4 },
   heroStat: { flex: 1, alignItems: "center", gap: 3 },
   heroStatVal: { fontSize: 16, fontFamily: "Inter_700Bold" },
@@ -898,8 +1234,9 @@ const styles = StyleSheet.create({
   limitNote: { fontSize: 12, fontFamily: "Inter_500Medium" },
   empty: { alignItems: "center", paddingVertical: 32, gap: 10 },
   emptyText: { fontSize: 14, fontFamily: "Inter_400Regular" },
-  overlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.55)" },
+  overlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.6)" },
   sheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, gap: 14 },
+  splitSheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, gap: 14, maxHeight: "90%" },
   handle: { width: 40, height: 4, borderRadius: 2, alignSelf: "center" },
   sheetTitle: { fontSize: 20, fontFamily: "Inter_700Bold" },
   amountRow: { flexDirection: "row", alignItems: "center", borderRadius: 12, borderWidth: 1.5, paddingHorizontal: 14 },
@@ -913,6 +1250,41 @@ const styles = StyleSheet.create({
   catSelectBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
   catSelectText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   sheetActions: { flexDirection: "row", gap: 12 },
-  sheetBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: "center" },
+  sheetBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 14, borderRadius: 12 },
   sheetBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  // Split modal specific
+  splitSuccessIcon: { width: 64, height: 64, borderRadius: 20, alignItems: "center", justifyContent: "center", alignSelf: "center" },
+  splitAskTitle: { fontSize: 22, fontFamily: "Inter_700Bold", textAlign: "center" },
+  splitAskAmount: { fontSize: 26, fontFamily: "Inter_700Bold", textAlign: "center" },
+  splitAskSubtitle: { fontSize: 14, fontFamily: "Inter_400Regular", textAlign: "center" },
+  splitPromptCard: { flexDirection: "row", alignItems: "center", gap: 10, padding: 14, borderRadius: 14, borderWidth: 1 },
+  splitPromptText: { flex: 1, fontSize: 14, fontFamily: "Inter_500Medium", lineHeight: 20 },
+  splitStepTitle: { fontSize: 20, fontFamily: "Inter_700Bold" },
+  splitStepSub: { fontSize: 13, fontFamily: "Inter_400Regular" },
+  splitTypeRow: { flexDirection: "row", gap: 10 },
+  splitTypeCard: { flex: 1, alignItems: "center", padding: 16, borderRadius: 16, gap: 6, borderWidth: 1.5 },
+  splitTypeLabel: { fontSize: 14, fontFamily: "Inter_700Bold" },
+  splitTypeHint: { fontSize: 11, fontFamily: "Inter_400Regular", textAlign: "center" },
+  memberSelectRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, gap: 10 },
+  memberSelectAvatar: { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  memberSelectInitials: { fontSize: 12, fontFamily: "Inter_700Bold" },
+  memberSelectName: { flex: 1, fontSize: 14, fontFamily: "Inter_500Medium" },
+  checkBox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, alignItems: "center", justifyContent: "center" },
+  unequalRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, gap: 10 },
+  unequalName: { flex: 1, fontSize: 14, fontFamily: "Inter_500Medium" },
+  unequalInputWrap: { flexDirection: "row", alignItems: "center", borderRadius: 8, borderWidth: 1.5, paddingHorizontal: 8, paddingVertical: 6, width: 110 },
+  unequalRupee: { fontSize: 14, fontFamily: "Inter_600SemiBold", marginRight: 3 },
+  unequalInput: { flex: 1, fontSize: 14, fontFamily: "Inter_700Bold" },
+  remainingRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 12, borderRadius: 10 },
+  remainingLabel: { fontSize: 13, fontFamily: "Inter_400Regular" },
+  remainingAmt: { fontSize: 16, fontFamily: "Inter_700Bold" },
+  splitSummaryCard: { borderRadius: 12, padding: 14, gap: 10 },
+  splitSummaryRow: { flexDirection: "row", justifyContent: "space-between" },
+  splitSummaryLabel: { fontSize: 13, fontFamily: "Inter_400Regular" },
+  splitSummaryVal: { fontSize: 13, fontFamily: "Inter_700Bold" },
+  confirmRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, gap: 10 },
+  confirmName: { flex: 1, fontSize: 14, fontFamily: "Inter_500Medium" },
+  confirmShare: { fontSize: 15, fontFamily: "Inter_700Bold" },
+  notifyPill: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  notifyPillText: { fontSize: 10, fontFamily: "Inter_600SemiBold" },
 });
