@@ -62,7 +62,7 @@ export default function WalletScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const {
-    groups, addWalletContribution, spendFromWallet,
+    groups, addWalletContribution, spendFromWallet, applyWalletSpent,
     updateWalletSettings, updateWalletMember, freezeWallet, addExpense,
   } = useData();
   const { addNotification } = useNotifications();
@@ -156,18 +156,29 @@ export default function WalletScreen() {
     if (!lastSpend || selectedMembers.length === 0) return;
     setSaving(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    const splits = group.members
+
+    const memberSplits = group.members
       .filter((m) => selectedMembers.includes(m.id))
       .map((m) => ({
         userId: m.id,
         amount: splitType === "equal" ? equalShare : (parseFloat(customSplits[m.id]) || 0),
         settled: m.id === "me",
       }));
+
+    // Record as group expense
     await addExpense({
       groupId: group.id, title: lastSpend.description, amount: lastSpend.amount,
-      paidBy: "me", paidByName: "You", splits,
+      paidBy: "me", paidByName: "You", splits: memberSplits,
       date: new Date().toISOString().split("T")[0], category: lastSpend.category,
     });
+
+    // Update each member's totalSpent by only their share (not the full amount)
+    await applyWalletSpent(
+      group.id,
+      memberSplits.map((s) => ({ userId: s.userId, amount: s.amount }))
+    );
+
+    // Notify each member of their share
     for (const m of group.members.filter((m) => selectedMembers.includes(m.id) && m.id !== "me")) {
       const share = splitType === "equal" ? equalShare : (parseFloat(customSplits[m.id]) || 0);
       await addNotification({
@@ -177,8 +188,18 @@ export default function WalletScreen() {
         amount: share, groupId: group.id,
       });
     }
+
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setSaving(false);
+    setShowSplitModal(false);
+    setSplitStep("ask");
+  };
+
+  // When user skips the split, the full amount is attributed to the payer (me)
+  const skipSplit = async () => {
+    if (lastSpend) {
+      await applyWalletSpent(group.id, [{ userId: "me", amount: lastSpend.amount }]);
+    }
     setShowSplitModal(false);
     setSplitStep("ask");
   };
@@ -925,7 +946,7 @@ export default function WalletScreen() {
                   </Text>
                 </View>
                 <View style={styles.sheetActions}>
-                  <Pressable style={[styles.sheetBtn, { backgroundColor: colors.secondary }]} onPress={() => setShowSplitModal(false)}>
+                  <Pressable style={[styles.sheetBtn, { backgroundColor: colors.secondary }]} onPress={skipSplit}>
                     <Text style={[styles.sheetBtnText, { color: colors.text }]}>Skip</Text>
                   </Pressable>
                   <Pressable style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5 }]} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSplitStep("choose_type"); }}>

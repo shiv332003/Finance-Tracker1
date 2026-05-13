@@ -100,6 +100,7 @@ interface DataContextType {
   settleExpense: (groupId: string, expenseId: string, userId: string) => Promise<void>;
   addWalletContribution: (groupId: string, amount: number, by: string, byId?: string) => Promise<{ success: boolean; error?: string }>;
   spendFromWallet: (groupId: string, amount: number, description: string, category: string, by: string, byId: string) => Promise<{ success: boolean; error?: string }>;
+  applyWalletSpent: (groupId: string, splits: { userId: string; amount: number }[]) => Promise<void>;
   updateWalletSettings: (groupId: string, settings: Partial<WalletSettings>) => Promise<void>;
   updateWalletMember: (groupId: string, userId: string, updates: Partial<WalletMember>) => Promise<void>;
   freezeWallet: (groupId: string, frozen: boolean) => Promise<void>;
@@ -446,18 +447,29 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     const newBalance = group.walletBalance - amount;
     const updated = groups.map((g) => {
       if (g.id !== groupId) return g;
-      const walletMembers = g.walletMembers.map((wm) =>
-        wm.userId === byId ? { ...wm, totalSpent: wm.totalSpent + amount } : wm
-      );
       return {
         ...g,
         walletBalance: newBalance,
         walletTransactions: [tx, ...g.walletTransactions],
-        walletMembers,
       };
     });
     await saveGroups(updated);
     return { success: true };
+  };
+
+  const applyWalletSpent = async (
+    groupId: string,
+    splits: { userId: string; amount: number }[]
+  ): Promise<void> => {
+    const updated = groups.map((g) => {
+      if (g.id !== groupId) return g;
+      const walletMembers = g.walletMembers.map((wm) => {
+        const split = splits.find((s) => s.userId === wm.userId);
+        return split ? { ...wm, totalSpent: wm.totalSpent + split.amount } : wm;
+      });
+      return { ...g, walletMembers };
+    });
+    await saveGroups(updated);
   };
 
   const updateWalletSettings = async (groupId: string, settings: Partial<WalletSettings>) => {
@@ -541,7 +553,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     <DataContext.Provider value={{
       groups, transactions, isLoading,
       createGroup, addExpense, settleExpense,
-      addWalletContribution, spendFromWallet,
+      addWalletContribution, spendFromWallet, applyWalletSpent,
       updateWalletSettings, updateWalletMember, freezeWallet,
       sendMoney, refreshData, addGroupMember, removeGroupMember,
     }}>
