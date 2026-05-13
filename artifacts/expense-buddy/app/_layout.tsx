@@ -44,6 +44,10 @@ function RootLayoutNav() {
         name="notifications"
         options={{ presentation: "card", headerShown: false }}
       />
+      <Stack.Screen
+        name="wallet/[id]"
+        options={{ presentation: "card", headerShown: false }}
+      />
     </Stack>
   );
 }

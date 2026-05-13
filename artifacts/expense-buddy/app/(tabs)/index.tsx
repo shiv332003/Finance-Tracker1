@@ -1,4 +1,4 @@
-import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import React, { useCallback } from "react";
@@ -45,9 +45,9 @@ export default function HomeScreen() {
     .filter((t) => !t.settled && t.type === "sent")
     .reduce((s, t) => s + t.amount, 0);
 
-  const onRefresh = useCallback(async () => {
-    await refreshData();
-  }, [refreshData]);
+  const onRefresh = useCallback(async () => { await refreshData(); }, [refreshData]);
+
+  const totalWalletBalance = groups.reduce((s, g) => s + g.walletBalance, 0);
 
   return (
     <ScrollView
@@ -60,7 +60,7 @@ export default function HomeScreen() {
     >
       <View style={{ height: topPad + 12 }} />
 
-      {/* Top bar with notification bell */}
+      {/* Top bar */}
       <View style={styles.topBar}>
         <View />
         <Pressable
@@ -83,6 +83,74 @@ export default function HomeScreen() {
         name={user?.name ?? ""}
       />
 
+      {/* Shared Wallets Strip */}
+      {groups.length > 0 && (
+        <View style={[styles.section, { paddingHorizontal: 0 }]}>
+          <View style={[styles.sectionHeader, { paddingHorizontal: 16 }]}>
+            <View style={styles.sectionTitleRow}>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>Shared Wallets</Text>
+              <View style={[styles.walletTotalBadge, { backgroundColor: colors.primary + "18" }]}>
+                <Text style={[styles.walletTotalText, { color: colors.primary }]}>
+                  ₹{totalWalletBalance.toLocaleString("en-IN")} total
+                </Text>
+              </View>
+            </View>
+            <Pressable onPress={() => router.push("/(tabs)/groups")}>
+              <Text style={[styles.seeAll, { color: colors.primary }]}>All groups</Text>
+            </Pressable>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingLeft: 16, paddingRight: 8, gap: 12 }}
+          >
+            {groups.map((g) => {
+              const ws = g.walletSettings;
+              const pct = Math.min((g.walletBalance / Math.max(g.walletLimit, 1)) * 100, 100);
+              const isLow = ws.alertEnabled && g.walletBalance < ws.minBalanceAlert;
+              return (
+                <Pressable
+                  key={g.id}
+                  style={[
+                    styles.walletCard,
+                    {
+                      backgroundColor: ws.frozen ? colors.warning + "18" : colors.primary,
+                      borderColor: isLow ? colors.warning : "transparent",
+                      borderWidth: isLow ? 1.5 : 0,
+                    },
+                  ]}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    router.push(`/wallet/${g.id}`);
+                  }}
+                >
+                  <View style={styles.walletCardTop}>
+                    <Text style={[styles.walletCardName, { color: ws.frozen ? colors.warning : "rgba(255,255,255,0.8)" }]} numberOfLines={1}>
+                      {ws.name || g.name}
+                    </Text>
+                    {ws.frozen ? (
+                      <Feather name="lock" size={13} color={colors.warning} />
+                    ) : isLow ? (
+                      <Feather name="alert-triangle" size={13} color="#fff" />
+                    ) : null}
+                  </View>
+                  <Text style={[styles.walletCardBalance, { color: ws.frozen ? colors.warning : "#fff" }]}>
+                    ₹{g.walletBalance.toLocaleString("en-IN")}
+                  </Text>
+                  <View style={[styles.walletProgressTrack, { backgroundColor: ws.frozen ? colors.warning + "33" : "rgba(255,255,255,0.25)" }]}>
+                    <View style={[styles.walletProgressFill, { width: `${pct}%` as any, backgroundColor: ws.frozen ? colors.warning : "rgba(255,255,255,0.85)" }]} />
+                  </View>
+                  <Text style={[styles.walletCardMembers, { color: ws.frozen ? colors.warning + "88" : "rgba(255,255,255,0.65)" }]}>
+                    {g.members.length} members · {g.walletTransactions.length} txns
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
+
+      {/* Quick Actions */}
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Quick Actions</Text>
         <View style={styles.actionsRow}>
@@ -107,32 +175,7 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {groups.length > 0 && (
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Active Groups</Text>
-            <Pressable onPress={() => router.push("/(tabs)/groups")}>
-              <Text style={[styles.seeAll, { color: colors.primary }]}>See all</Text>
-            </Pressable>
-          </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 0, gap: 12 }}>
-            {groups.slice(0, 4).map((g) => (
-              <Pressable
-                key={g.id}
-                style={[styles.groupChip, { backgroundColor: colors.card }]}
-                onPress={() => router.push(`/group/${g.id}`)}
-              >
-                <View style={[styles.chipDot, { backgroundColor: g.myBalance >= 0 ? colors.success : colors.destructive }]} />
-                <Text style={[styles.chipName, { color: colors.text }]} numberOfLines={1}>{g.name}</Text>
-                <Text style={[styles.chipBalance, { color: g.myBalance >= 0 ? colors.success : colors.destructive }]}>
-                  {g.myBalance >= 0 ? "+" : ""}₹{Math.abs(g.myBalance)}
-                </Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-        </View>
-      )}
-
+      {/* Recent Activity */}
       <View style={[styles.section, { paddingHorizontal: 0 }]}>
         <View style={[styles.sectionHeader, { paddingHorizontal: 16 }]}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Recent Activity</Text>
@@ -147,9 +190,7 @@ export default function HomeScreen() {
               <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No transactions yet</Text>
             </View>
           ) : (
-            recent.map((tx) => (
-              <TransactionItem key={tx.id} transaction={tx} />
-            ))
+            recent.map((tx) => <TransactionItem key={tx.id} transaction={tx} />)
           )}
         </View>
       </View>
@@ -159,57 +200,33 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  topBar: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    marginBottom: 12,
-  },
-  bellBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  badge: {
-    position: "absolute",
-    top: -4,
-    right: -4,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  topBar: { flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: 16, marginBottom: 12 },
+  bellBtn: { width: 42, height: 42, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  badge: { position: "absolute", top: -4, right: -4, width: 18, height: 18, borderRadius: 9, alignItems: "center", justifyContent: "center" },
   badgeText: { fontSize: 10, color: "#fff", fontFamily: "Inter_700Bold" },
   section: { paddingHorizontal: 16, marginTop: 24 },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
+  sectionTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   sectionTitle: { fontSize: 18, fontFamily: "Inter_700Bold" },
+  walletTotalBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+  walletTotalText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
   seeAll: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
-  actionsRow: { flexDirection: "row", gap: 12 },
-  actionBtn: {
-    flex: 1,
-    alignItems: "center",
-    paddingVertical: 16,
-    borderRadius: 16,
+  walletCard: {
+    width: 180,
+    padding: 16,
+    borderRadius: 18,
     gap: 8,
   },
+  walletCardTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  walletCardName: { fontSize: 12, fontFamily: "Inter_500Medium", flex: 1, marginRight: 4 },
+  walletCardBalance: { fontSize: 24, fontFamily: "Inter_700Bold" },
+  walletProgressTrack: { height: 4, borderRadius: 2, overflow: "hidden" },
+  walletProgressFill: { height: "100%", borderRadius: 2 },
+  walletCardMembers: { fontSize: 11, fontFamily: "Inter_400Regular" },
+  actionsRow: { flexDirection: "row", gap: 12 },
+  actionBtn: { flex: 1, alignItems: "center", paddingVertical: 16, borderRadius: 16, gap: 8 },
   actionIcon: { width: 44, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   actionLabel: { fontSize: 12, fontFamily: "Inter_500Medium" },
-  groupChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
-    minWidth: 150,
-  },
-  chipDot: { width: 8, height: 8, borderRadius: 4 },
-  chipName: { flex: 1, fontSize: 13, fontFamily: "Inter_600SemiBold" },
-  chipBalance: { fontSize: 13, fontFamily: "Inter_700Bold" },
   txCard: { borderRadius: 16, paddingHorizontal: 16, overflow: "hidden" },
   empty: { alignItems: "center", paddingVertical: 32, gap: 10 },
   emptyText: { fontSize: 14, fontFamily: "Inter_400Regular" },

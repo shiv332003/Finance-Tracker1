@@ -1,0 +1,132 @@
+Add a new feature called “Shared Wallets” inside the app.
+
+The Shared Wallet feature should allow groups (trip groups, roommates, event groups, etc.) to create a common wallet where all members can contribute money and use the shared balance for group expenses.
+
+Core Requirements:
+
+1. Create Shared Wallet
+
+* Any group member can create a shared wallet
+* Wallet should have:
+
+  * Wallet name
+  * Description
+  * Total balance
+  * Members list
+  * Contribution history
+  * Expense history
+
+2. Add Money to Wallet
+
+* Members can add money individually using UPI/payment methods
+* Example:
+
+  * Member A adds ₹500
+  * Member B adds ₹500
+  * Shared wallet balance becomes ₹1000
+* Store contribution history with timestamps
+
+3. Shared Wallet Usage
+
+* Any authorized member can use wallet balance for expenses
+* After payment:
+
+  * Wallet balance updates automatically
+  * Expense is added to wallet history
+  * All members receive notifications
+
+4. Spending Limits
+
+* Wallet creator/admin can set:
+
+  * Per-member spending limits
+  * Daily spending limits
+  * Maximum transaction amount
+* Prevent users from spending beyond allowed limits
+* Show warning/error popup if limit exceeded
+
+5. Low Balance Notifications
+
+* Notify all members when wallet balance goes below a threshold
+* Example:
+
+  * “Shared wallet balance is below ₹500”
+* Allow admin to configure minimum balance alert amount
+
+6. Wallet Permissions
+
+* Roles:
+
+  * Admin
+  * Member
+* Admin can:
+
+  * Add/remove members
+  * Set spending limits
+  * Freeze wallet
+  * View analytics
+* Members can:
+
+  * Add money
+  * Use wallet within allowed limits
+  * View transactions
+
+7. Transaction History
+
+* Show:
+
+  * Who added money
+  * Who spent money
+  * Amount
+  * Time
+  * Description/category
+* Include filters and search
+
+8. Analytics Dashboard
+
+* Show:
+
+  * Total contributions per member
+  * Total spending per member
+  * Remaining balance
+  * Spending categories
+  * Monthly summaries
+
+9. Notifications
+
+* Real-time notifications for:
+
+  * New contribution
+  * Expense made
+  * Limit exceeded
+  * Low balance
+  * Member added/removed
+
+10. UI/UX
+
+* Modern fintech-style UI
+* Wallet cards on home screen
+* Circular balance indicator
+* Smooth animations and transaction updates
+* Shared wallet details screen with tabs:
+
+  * Overview
+  * Members
+  * Transactions
+  * Analytics
+  * Settings
+
+11. Security & Validation
+
+* Confirm transactions before deduction
+* Prevent duplicate deductions
+* Validate balance before spending
+* Maintain accurate wallet ledger/history
+
+The feature should integrate smoothly with existing:
+
+* Groups
+* Expense splitting
+* Notifications
+* Payment flow
+* Settlement system

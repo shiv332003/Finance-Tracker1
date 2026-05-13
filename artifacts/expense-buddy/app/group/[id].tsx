@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Member, useData } from "@/context/DataContext";
+import { useNotifications } from "@/context/NotificationContext";
 import { useColors } from "@/hooks/useColors";
 
 const CATEGORIES = ["Food", "Groceries", "Utilities", "Hotel", "Transport", "Entertainment", "Other"];
@@ -34,17 +35,15 @@ export default function GroupDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { groups, addExpense, settleExpense, addWalletContribution, addGroupMember, removeGroupMember } = useData();
+  const { addNotification } = useNotifications();
 
   const group = groups.find((g) => g.id === id);
-
   const [tab, setTab] = useState<"expenses" | "wallet" | "members">("expenses");
   const [showAddExpense, setShowAddExpense] = useState(false);
-  const [showAddFunds, setShowAddFunds] = useState(false);
   const [showAddMember, setShowAddMember] = useState(false);
   const [expTitle, setExpTitle] = useState("");
   const [expAmount, setExpAmount] = useState("");
   const [expCategory, setExpCategory] = useState("Food");
-  const [walletAmount, setWalletAmount] = useState("");
   const [adding, setAdding] = useState(false);
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
@@ -61,9 +60,7 @@ export default function GroupDetailScreen() {
     .flatMap((e) => e.splits.filter((s) => s.userId === "me" && !s.settled).map((s) => ({ expense: e, split: s })))
     .reduce((sum, { split }) => sum + split.amount, 0);
 
-  const availableContacts = ALL_CONTACTS.filter(
-    (c) => !group.members.find((m) => m.id === c.id)
-  );
+  const availableContacts = ALL_CONTACTS.filter((c) => !group.members.find((m) => m.id === c.id));
 
   const handleAddExpense = async () => {
     if (!expTitle || !expAmount) return;
@@ -82,6 +79,13 @@ export default function GroupDetailScreen() {
         date: new Date().toISOString().split("T")[0],
         category: expCategory,
       });
+      await addNotification({
+        type: "split_request",
+        title: `Expense added: ${expTitle}`,
+        body: `₹${amount.toFixed(0)} split among ${group.members.length} members in ${group.name}`,
+        amount,
+        groupId: group.id,
+      });
       setExpTitle("");
       setExpAmount("");
       setShowAddExpense(false);
@@ -91,38 +95,30 @@ export default function GroupDetailScreen() {
     }
   };
 
-  const handleAddFunds = async () => {
-    if (!walletAmount) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    await addWalletContribution(group.id, parseFloat(walletAmount), "You");
-    setWalletAmount("");
-    setShowAddFunds(false);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  };
-
   const handleAddMember = async (contact: Omit<Member, "contribution">) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     await addGroupMember(group.id, contact);
+    await addNotification({
+      type: "group_added",
+      title: `${contact.name} added to ${group.name}`,
+      body: `${contact.name} is now a member of ${group.name} and the shared wallet`,
+      groupId: group.id,
+    });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
   const handleRemoveMember = (memberId: string, memberName: string) => {
     if (memberId === "me") return;
-    Alert.alert(
-      "Remove Member",
-      `Remove ${memberName} from this group?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          style: "destructive",
-          onPress: async () => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            await removeGroupMember(group.id, memberId);
-          },
+    Alert.alert("Remove Member", `Remove ${memberName} from this group?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove", style: "destructive",
+        onPress: async () => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          await removeGroupMember(group.id, memberId);
         },
-      ]
-    );
+      },
+    ]);
   };
 
   return (
@@ -133,9 +129,7 @@ export default function GroupDetailScreen() {
         </Pressable>
         <View style={styles.headerInfo}>
           <Text style={[styles.groupName, { color: colors.text }]}>{group.name}</Text>
-          <Text style={[styles.memberCount, { color: colors.mutedForeground }]}>
-            {group.members.length} members
-          </Text>
+          <Text style={[styles.memberCount, { color: colors.mutedForeground }]}>{group.members.length} members</Text>
         </View>
         <Pressable
           style={[styles.addExpBtn, { backgroundColor: colors.primary }]}
@@ -146,6 +140,7 @@ export default function GroupDetailScreen() {
         </Pressable>
       </View>
 
+      {/* Balance summary */}
       <View style={styles.balanceSummary}>
         <View style={[styles.summaryCard, { backgroundColor: colors.success + "18" }]}>
           <Text style={[styles.sumLabel, { color: colors.mutedForeground }]}>Wallet</Text>
@@ -165,6 +160,7 @@ export default function GroupDetailScreen() {
         )}
       </View>
 
+      {/* Tabs */}
       <View style={[styles.tabs, { backgroundColor: colors.card, marginHorizontal: 16 }]}>
         {(["expenses", "wallet", "members"] as const).map((t) => (
           <Pressable
@@ -183,6 +179,7 @@ export default function GroupDetailScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: (Platform.OS === "web" ? 34 : insets.bottom) + 80, paddingTop: 12 }}
       >
+        {/* EXPENSES TAB */}
         {tab === "expenses" && (
           <View style={{ paddingHorizontal: 16, gap: 10 }}>
             {group.expenses.length === 0 ? (
@@ -204,14 +201,11 @@ export default function GroupDetailScreen() {
                     </View>
                     <Text style={[styles.expTitle, { color: colors.text }]}>{expense.title}</Text>
                     <View style={styles.expMeta}>
-                      <Text style={[styles.expPaidBy, { color: colors.mutedForeground }]}>
-                        Paid by {expense.paidByName}
-                      </Text>
+                      <Text style={[styles.expPaidBy, { color: colors.mutedForeground }]}>Paid by {expense.paidByName}</Text>
                       <Text style={[styles.expAmount, { color: colors.text }]}>₹{expense.amount.toLocaleString("en-IN")}</Text>
                     </View>
-                    {/* Per-member settlement status */}
                     <View style={styles.splitsRow}>
-                      {expense.splits.slice(0, 4).map((s) => {
+                      {expense.splits.slice(0, 5).map((s) => {
                         const m = group.members.find((mem) => mem.id === s.userId);
                         if (!m) return null;
                         return (
@@ -228,9 +222,7 @@ export default function GroupDetailScreen() {
                     </View>
                     {myShare && (
                       <View style={[styles.expFooter, { borderTopColor: colors.border }]}>
-                        <Text style={[styles.myShare, { color: colors.mutedForeground }]}>
-                          Your share: ₹{myShare.amount.toFixed(0)}
-                        </Text>
+                        <Text style={[styles.myShare, { color: colors.mutedForeground }]}>Your share: ₹{myShare.amount.toFixed(0)}</Text>
                         {settled ? (
                           <View style={[styles.settledBadge, { backgroundColor: colors.success + "22" }]}>
                             <Feather name="check-circle" size={12} color={colors.success} />
@@ -239,10 +231,7 @@ export default function GroupDetailScreen() {
                         ) : (
                           <Pressable
                             style={[styles.settleBtn, { backgroundColor: colors.primary }]}
-                            onPress={() => {
-                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                              settleExpense(group.id, expense.id, "me");
-                            }}
+                            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); settleExpense(group.id, expense.id, "me"); }}
                           >
                             <Text style={styles.settleBtnText}>Settle</Text>
                           </Pressable>
@@ -256,29 +245,55 @@ export default function GroupDetailScreen() {
           </View>
         )}
 
+        {/* WALLET TAB — full-featured entry point */}
         {tab === "wallet" && (
           <View style={{ paddingHorizontal: 16, gap: 12 }}>
-            <View style={[styles.walletCard, { backgroundColor: colors.primary }]}>
-              <Text style={styles.walletLabel}>Shared Wallet Balance</Text>
-              <Text style={styles.walletBalance}>₹{group.walletBalance.toLocaleString("en-IN")}</Text>
-              <View style={styles.limitRow}>
-                <Text style={styles.limitText}>Limit: ₹{group.walletLimit.toLocaleString("en-IN")}</Text>
-                <View style={[styles.limitBar, { backgroundColor: "rgba(255,255,255,0.2)" }]}>
-                  <View style={[styles.limitFill, { width: `${Math.min((group.walletBalance / group.walletLimit) * 100, 100)}%` as any }]} />
+            {/* Wallet card linking to full wallet screen */}
+            <Pressable
+              style={[styles.walletEntryCard, { backgroundColor: group.walletSettings.frozen ? colors.warning + "18" : colors.primary }]}
+              onPress={() => router.push(`/wallet/${group.id}`)}
+            >
+              <View style={styles.walletEntryTop}>
+                <View>
+                  <Text style={[styles.walletEntryName, { color: group.walletSettings.frozen ? colors.warning : "rgba(255,255,255,0.8)" }]}>
+                    {group.walletSettings.name || "Shared Wallet"}
+                  </Text>
+                  {group.walletSettings.frozen && (
+                    <View style={styles.frozenRow}>
+                      <Feather name="lock" size={12} color={colors.warning} />
+                      <Text style={[styles.frozenLabel, { color: colors.warning }]}>Frozen</Text>
+                    </View>
+                  )}
+                </View>
+                <View style={[styles.openWalletBtn, { backgroundColor: "rgba(255,255,255,0.2)" }]}>
+                  <Text style={styles.openWalletText}>Open Wallet</Text>
+                  <Feather name="arrow-right" size={14} color="#fff" />
                 </View>
               </View>
-              <Pressable
-                style={[styles.addFundsBtn, { backgroundColor: "rgba(255,255,255,0.2)" }]}
-                onPress={() => setShowAddFunds(true)}
-              >
-                <Feather name="plus-circle" size={16} color="#fff" />
-                <Text style={styles.addFundsBtnText}>Add Funds</Text>
-              </Pressable>
-            </View>
+              <Text style={[styles.walletEntryBalance, { color: group.walletSettings.frozen ? colors.warning : "#fff" }]}>
+                ₹{group.walletBalance.toLocaleString("en-IN")}
+              </Text>
+              <View style={[styles.walletProgressTrack, { backgroundColor: group.walletSettings.frozen ? colors.warning + "33" : "rgba(255,255,255,0.25)" }]}>
+                <View style={[styles.walletProgressFill, {
+                  width: `${Math.min((group.walletBalance / Math.max(group.walletLimit, 1)) * 100, 100)}%` as any,
+                  backgroundColor: group.walletSettings.frozen ? colors.warning : "rgba(255,255,255,0.85)",
+                }]} />
+              </View>
+              <Text style={[styles.walletEntryLimit, { color: group.walletSettings.frozen ? colors.warning + "88" : "rgba(255,255,255,0.65)" }]}>
+                Limit: ₹{group.walletLimit.toLocaleString("en-IN")} · {group.members.length} members
+              </Text>
+              {group.walletSettings.alertEnabled && group.walletBalance < group.walletSettings.minBalanceAlert && (
+                <View style={[styles.lowBal, { backgroundColor: "rgba(0,0,0,0.2)" }]}>
+                  <Feather name="alert-triangle" size={12} color="#fff" />
+                  <Text style={styles.lowBalText}>Balance below alert threshold (₹{group.walletSettings.minBalanceAlert})</Text>
+                </View>
+              )}
+            </Pressable>
 
-            <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>TRANSACTIONS</Text>
-            {group.walletTransactions.map((tx) => (
-              <View key={tx.id} style={[styles.walletTxRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            {/* Recent wallet transactions preview */}
+            <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>RECENT TRANSACTIONS</Text>
+            {group.walletTransactions.slice(0, 5).map((tx) => (
+              <View key={tx.id} style={[styles.walletTxRow, { backgroundColor: colors.card }]}>
                 <View style={[styles.walletTxIcon, { backgroundColor: (tx.type === "credit" ? colors.success : colors.destructive) + "20" }]}>
                   <Feather name={tx.type === "credit" ? "arrow-down-left" : "arrow-up-right"} size={16} color={tx.type === "credit" ? colors.success : colors.destructive} />
                 </View>
@@ -291,12 +306,25 @@ export default function GroupDetailScreen() {
                 </Text>
               </View>
             ))}
+            {group.walletTransactions.length === 0 && (
+              <View style={styles.empty}>
+                <MaterialCommunityIcons name="wallet-outline" size={32} color={colors.mutedForeground} />
+                <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No wallet activity yet</Text>
+              </View>
+            )}
+            <Pressable
+              style={[styles.viewAllBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+              onPress={() => router.push(`/wallet/${group.id}`)}
+            >
+              <Feather name="external-link" size={14} color={colors.primary} />
+              <Text style={[styles.viewAllText, { color: colors.primary }]}>View full wallet with analytics & settings</Text>
+            </Pressable>
           </View>
         )}
 
+        {/* MEMBERS TAB */}
         {tab === "members" && (
           <View style={{ paddingHorizontal: 16, gap: 10 }}>
-            {/* Add Member Button */}
             {availableContacts.length > 0 && (
               <Pressable
                 style={[styles.addMemberBtn, { backgroundColor: colors.primary + "14", borderColor: colors.primary + "33" }]}
@@ -308,35 +336,43 @@ export default function GroupDetailScreen() {
                 <Text style={[styles.addMemberText, { color: colors.primary }]}>Add Member</Text>
               </Pressable>
             )}
-
-            {group.members.map((member) => (
-              <View key={member.id} style={[styles.memberCard, { backgroundColor: colors.card }]}>
-                <View style={[styles.memberAvatar, { backgroundColor: member.color + "22" }]}>
-                  <Text style={[styles.memberInitials, { color: member.color }]}>{member.initials}</Text>
-                </View>
-                <View style={styles.memberInfo}>
-                  <View style={styles.memberNameRow}>
-                    <Text style={[styles.memberName, { color: colors.text }]}>{member.id === "me" ? "You" : member.name}</Text>
-                    {member.id === "me" && (
-                      <View style={[styles.youBadge, { backgroundColor: colors.primary + "22" }]}>
-                        <Text style={[styles.youBadgeText, { color: colors.primary }]}>You</Text>
-                      </View>
-                    )}
+            {group.members.map((member) => {
+              const wm = group.walletMembers?.find((w) => w.userId === member.id);
+              return (
+                <View key={member.id} style={[styles.memberCard, { backgroundColor: colors.card }]}>
+                  <View style={[styles.memberAvatar, { backgroundColor: member.color + "22" }]}>
+                    <Text style={[styles.memberInitials, { color: member.color }]}>{member.initials}</Text>
                   </View>
-                  <Text style={[styles.memberContrib, { color: colors.mutedForeground }]}>
-                    Contributed: ₹{member.contribution.toLocaleString("en-IN")}
-                  </Text>
+                  <View style={styles.memberInfo}>
+                    <View style={styles.memberNameRow}>
+                      <Text style={[styles.memberName, { color: colors.text }]}>{member.id === "me" ? "You" : member.name}</Text>
+                      {member.id === "me" && (
+                        <View style={[styles.youBadge, { backgroundColor: colors.primary + "22" }]}>
+                          <Text style={[styles.youBadgeText, { color: colors.primary }]}>You</Text>
+                        </View>
+                      )}
+                      {wm?.role === "admin" && (
+                        <View style={[styles.adminBadge, { backgroundColor: colors.success + "18" }]}>
+                          <Text style={[styles.adminBadgeText, { color: colors.success }]}>Admin</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={[styles.memberContrib, { color: colors.mutedForeground }]}>
+                      Contributed: ₹{member.contribution.toLocaleString("en-IN")}
+                      {wm ? ` · Spent: ₹${wm.totalSpent.toLocaleString("en-IN")}` : ""}
+                    </Text>
+                  </View>
+                  {member.id !== "me" && (
+                    <Pressable
+                      style={[styles.removeBtn, { backgroundColor: colors.destructive + "18" }]}
+                      onPress={() => handleRemoveMember(member.id, member.name)}
+                    >
+                      <Feather name="user-minus" size={14} color={colors.destructive} />
+                    </Pressable>
+                  )}
                 </View>
-                {member.id !== "me" && (
-                  <Pressable
-                    style={[styles.removeBtn, { backgroundColor: colors.destructive + "18" }]}
-                    onPress={() => handleRemoveMember(member.id, member.name)}
-                  >
-                    <Feather name="user-minus" size={14} color={colors.destructive} />
-                  </Pressable>
-                )}
-              </View>
-            ))}
+              );
+            })}
           </View>
         )}
       </ScrollView>
@@ -371,28 +407,20 @@ export default function GroupDetailScreen() {
               {CATEGORIES.map((c) => (
                 <Pressable
                   key={c}
-                  style={[
-                    styles.catChip,
-                    {
-                      backgroundColor: expCategory === c ? colors.primary + "22" : colors.secondary,
-                      borderColor: expCategory === c ? colors.primary : "transparent",
-                      borderWidth: 1.5,
-                    },
-                  ]}
+                  style={[styles.catChip, {
+                    backgroundColor: expCategory === c ? colors.primary + "22" : colors.secondary,
+                    borderColor: expCategory === c ? colors.primary : "transparent",
+                    borderWidth: 1.5,
+                  }]}
                   onPress={() => setExpCategory(c)}
                 >
-                  <Text style={[styles.catChipText, { color: expCategory === c ? colors.primary : colors.mutedForeground }]}>
-                    {c}
-                  </Text>
+                  <Text style={[styles.catChipText, { color: expCategory === c ? colors.primary : colors.mutedForeground }]}>{c}</Text>
                 </Pressable>
               ))}
             </ScrollView>
-            <Text style={[styles.splitInfo, { color: colors.mutedForeground }]}>
-              Split equally among {group.members.length} members
-            </Text>
             {expAmount ? (
-              <Text style={[styles.perPersonText, { color: colors.text }]}>
-                ₹{(parseFloat(expAmount) / group.members.length).toFixed(2)} per person
+              <Text style={[styles.splitInfo, { color: colors.mutedForeground }]}>
+                ₹{(parseFloat(expAmount) / group.members.length).toFixed(2)} per person ({group.members.length} members)
               </Text>
             ) : null}
             <View style={styles.modalActions}>
@@ -404,43 +432,7 @@ export default function GroupDetailScreen() {
                 onPress={handleAddExpense}
                 disabled={adding || !expTitle || !expAmount}
               >
-                <Text style={[styles.modalBtnText, { color: "#fff" }]}>
-                  {adding ? "Adding..." : "Add Expense"}
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Add Funds Modal */}
-      <Modal visible={showAddFunds} transparent animationType="slide">
-        <View style={styles.overlay}>
-          <View style={[styles.sheet, { backgroundColor: colors.card }]}>
-            <View style={[styles.handle, { backgroundColor: colors.border }]} />
-            <Text style={[styles.sheetTitle, { color: colors.text }]}>Add to Wallet</Text>
-            <View style={[styles.amountRow, { backgroundColor: colors.input, borderColor: colors.border }]}>
-              <Text style={[styles.rupee, { color: colors.text }]}>₹</Text>
-              <TextInput
-                style={[styles.amountInput, { color: colors.text }]}
-                placeholder="Amount"
-                placeholderTextColor={colors.mutedForeground}
-                keyboardType="numeric"
-                value={walletAmount}
-                onChangeText={setWalletAmount}
-                autoFocus
-              />
-            </View>
-            <View style={styles.modalActions}>
-              <Pressable style={[styles.modalBtn, { backgroundColor: colors.secondary }]} onPress={() => setShowAddFunds(false)}>
-                <Text style={[styles.modalBtnText, { color: colors.text }]}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.modalBtn, { backgroundColor: colors.success, flex: 1.5 }]}
-                onPress={handleAddFunds}
-                disabled={!walletAmount}
-              >
-                <Text style={[styles.modalBtnText, { color: "#fff" }]}>Add Funds</Text>
+                <Text style={[styles.modalBtnText, { color: "#fff" }]}>{adding ? "Adding..." : "Add Expense"}</Text>
               </Pressable>
             </View>
           </View>
@@ -454,35 +446,26 @@ export default function GroupDetailScreen() {
             <View style={[styles.handle, { backgroundColor: colors.border }]} />
             <Text style={[styles.sheetTitle, { color: colors.text }]}>Add Member</Text>
             <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 340 }}>
-              {availableContacts.length === 0 ? (
-                <Text style={[styles.emptyText, { color: colors.mutedForeground, textAlign: "center", paddingVertical: 24 }]}>
-                  All contacts are already in this group
-                </Text>
-              ) : (
-                availableContacts.map((c) => (
-                  <Pressable
-                    key={c.id}
-                    style={[styles.addContactRow, { borderBottomColor: colors.border }]}
-                    onPress={() => { handleAddMember(c); setShowAddMember(false); }}
-                  >
-                    <View style={[styles.memberAvatar, { backgroundColor: c.color + "22" }]}>
-                      <Text style={[styles.memberInitials, { color: c.color }]}>{c.initials}</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.memberName, { color: colors.text }]}>{c.name}</Text>
-                      <Text style={[styles.memberContrib, { color: colors.mutedForeground }]}>+91 {c.phone}</Text>
-                    </View>
-                    <View style={[styles.addIcon, { backgroundColor: colors.primary + "22" }]}>
-                      <Feather name="plus" size={16} color={colors.primary} />
-                    </View>
-                  </Pressable>
-                ))
-              )}
+              {availableContacts.map((c) => (
+                <Pressable
+                  key={c.id}
+                  style={[styles.addContactRow, { borderBottomColor: colors.border }]}
+                  onPress={() => { handleAddMember(c); setShowAddMember(false); }}
+                >
+                  <View style={[styles.memberAvatar, { backgroundColor: c.color + "22" }]}>
+                    <Text style={[styles.memberInitials, { color: c.color }]}>{c.initials}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.memberName, { color: colors.text }]}>{c.name}</Text>
+                    <Text style={[styles.memberContrib, { color: colors.mutedForeground }]}>+91 {c.phone}</Text>
+                  </View>
+                  <View style={[styles.addIcon, { backgroundColor: colors.primary + "22" }]}>
+                    <Feather name="plus" size={16} color={colors.primary} />
+                  </View>
+                </Pressable>
+              ))}
             </ScrollView>
-            <Pressable
-              style={[styles.modalBtn, { backgroundColor: colors.secondary }]}
-              onPress={() => setShowAddMember(false)}
-            >
+            <Pressable style={[styles.modalBtn, { backgroundColor: colors.secondary }]} onPress={() => setShowAddMember(false)}>
               <Text style={[styles.modalBtnText, { color: colors.text }]}>Close</Text>
             </Pressable>
           </View>
@@ -530,22 +513,28 @@ const styles = StyleSheet.create({
   settledText: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
   settleBtn: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8 },
   settleBtnText: { color: "#fff", fontSize: 12, fontFamily: "Inter_600SemiBold" },
-  walletCard: { borderRadius: 20, padding: 24, gap: 12 },
-  walletLabel: { fontSize: 12, color: "rgba(255,255,255,0.7)", fontFamily: "Inter_400Regular", textTransform: "uppercase", letterSpacing: 0.5 },
-  walletBalance: { fontSize: 36, color: "#fff", fontFamily: "Inter_700Bold" },
-  limitRow: { gap: 8 },
-  limitText: { fontSize: 12, color: "rgba(255,255,255,0.7)", fontFamily: "Inter_400Regular" },
-  limitBar: { height: 6, borderRadius: 3, overflow: "hidden" },
-  limitFill: { height: "100%", backgroundColor: "rgba(255,255,255,0.8)", borderRadius: 3 },
-  addFundsBtn: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 10, paddingHorizontal: 16, borderRadius: 10, alignSelf: "flex-start" },
-  addFundsBtnText: { color: "#fff", fontFamily: "Inter_600SemiBold", fontSize: 13 },
+  walletEntryCard: { borderRadius: 20, padding: 22, gap: 10 },
+  walletEntryTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  walletEntryName: { fontSize: 12, fontFamily: "Inter_500Medium" },
+  frozenRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 3 },
+  frozenLabel: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  openWalletBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10 },
+  openWalletText: { color: "#fff", fontSize: 12, fontFamily: "Inter_600SemiBold" },
+  walletEntryBalance: { fontSize: 38, fontFamily: "Inter_700Bold" },
+  walletProgressTrack: { height: 6, borderRadius: 3, overflow: "hidden" },
+  walletProgressFill: { height: "100%", borderRadius: 3 },
+  walletEntryLimit: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  lowBal: { flexDirection: "row", alignItems: "center", gap: 6, padding: 8, borderRadius: 8 },
+  lowBalText: { color: "#fff", fontSize: 11, fontFamily: "Inter_500Medium", flex: 1 },
   sectionLabel: { fontSize: 11, fontFamily: "Inter_600SemiBold", letterSpacing: 1, textTransform: "uppercase" },
-  walletTxRow: { flexDirection: "row", alignItems: "center", padding: 12, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, gap: 12 },
+  walletTxRow: { flexDirection: "row", alignItems: "center", padding: 12, borderRadius: 12, gap: 12 },
   walletTxIcon: { width: 38, height: 38, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   walletTxInfo: { flex: 1 },
   walletTxDesc: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   walletTxBy: { fontSize: 11, fontFamily: "Inter_400Regular", marginTop: 2 },
   walletTxAmount: { fontSize: 15, fontFamily: "Inter_700Bold" },
+  viewAllBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, padding: 14, borderRadius: 12, borderWidth: 1 },
+  viewAllText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   addMemberBtn: { flexDirection: "row", alignItems: "center", gap: 10, padding: 14, borderRadius: 14, borderWidth: 1.5 },
   addMemberIcon: { width: 38, height: 38, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   addMemberText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
@@ -553,11 +542,13 @@ const styles = StyleSheet.create({
   memberAvatar: { width: 44, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   memberInitials: { fontSize: 15, fontFamily: "Inter_700Bold" },
   memberInfo: { flex: 1 },
-  memberNameRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  memberNameRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
   memberName: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
   memberContrib: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
   youBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 7 },
   youBadgeText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  adminBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 7 },
+  adminBadgeText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
   removeBtn: { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   addContactRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
   addIcon: { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center" },
@@ -573,7 +564,6 @@ const styles = StyleSheet.create({
   catChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
   catChipText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   splitInfo: { fontSize: 13, fontFamily: "Inter_400Regular" },
-  perPersonText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
   modalActions: { flexDirection: "row", gap: 12 },
   modalBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: "center" },
   modalBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
