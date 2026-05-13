@@ -1,4 +1,4 @@
-import { Feather } from "@expo/vector-icons";
+import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useMemo, useState } from "react";
@@ -19,6 +19,7 @@ import { useNotifications } from "@/context/NotificationContext";
 import { useColors } from "@/hooks/useColors";
 
 type WalletTab = "overview" | "members" | "transactions" | "analytics" | "settings";
+type PayMethod = "qr" | "phone" | "upi" | "bank" | "contact";
 type SplitStep = "ask" | "choose_type" | "unequal_input" | "confirm";
 type SplitType = "equal" | "unequal";
 
@@ -35,6 +36,14 @@ const CATEGORY_ICONS: Record<string, string> = {
   Other: "more-horizontal",
 };
 
+const PAY_METHODS: { id: PayMethod; icon: string; iconLib: "feather" | "mci"; label: string; desc: string; color: string }[] = [
+  { id: "qr", icon: "qr-code-scanner", iconLib: "mci", label: "Scan QR", desc: "Scan any UPI QR code", color: "#7C5CFF" },
+  { id: "phone", icon: "phone", iconLib: "feather", label: "Phone Number", desc: "Pay via mobile number", color: "#4ECDC4" },
+  { id: "upi", icon: "at-sign", iconLib: "feather", label: "UPI ID", desc: "Enter UPI/VPA address", color: "#FF9500" },
+  { id: "bank", icon: "credit-card", iconLib: "feather", label: "Bank Transfer", desc: "Account + IFSC transfer", color: "#00D395" },
+  { id: "contact", icon: "users", iconLib: "feather", label: "Group Member", desc: "Pay a member directly", color: "#FF6B6B" },
+];
+
 function formatTs(ts: string) {
   const d = new Date(ts);
   return d.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
@@ -44,6 +53,7 @@ interface LastSpend {
   amount: number;
   description: string;
   category: string;
+  recipient?: string;
 }
 
 export default function WalletScreen() {
@@ -65,11 +75,21 @@ export default function WalletScreen() {
   const [showAddFunds, setShowAddFunds] = useState(false);
   const [fundAmount, setFundAmount] = useState("");
 
-  // Spend
-  const [showSpend, setShowSpend] = useState(false);
-  const [spendAmount, setSpendAmount] = useState("");
-  const [spendDesc, setSpendDesc] = useState("");
-  const [spendCategory, setSpendCategory] = useState("Other");
+  // Pay hub
+  const [showPayHub, setShowPayHub] = useState(false);
+  const [payMethod, setPayMethod] = useState<PayMethod | null>(null);
+  const [payAmount, setPayAmount] = useState("");
+  const [payNote, setPayNote] = useState("");
+  const [payCategory, setPayCategory] = useState("Other");
+  const [payPhone, setPayPhone] = useState("");
+  const [payUPI, setPayUPI] = useState("");
+  const [payBankAcc, setPayBankAcc] = useState("");
+  const [payBankIFSC, setPayBankIFSC] = useState("");
+  const [payContact, setPayContact] = useState<{ id: string; name: string } | null>(null);
+  const [qrScanned, setQrScanned] = useState(false);
+  const [qrInfo, setQrInfo] = useState<{ name: string; upi: string } | null>(null);
+  const [payProcessing, setPayProcessing] = useState(false);
+  const [paySuccess, setPaySuccess] = useState(false);
 
   // Post-spend split flow
   const [showSplitModal, setShowSplitModal] = useState(false);
@@ -114,11 +134,7 @@ export default function WalletScreen() {
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   }, [group.walletTransactions]);
 
-  // ─── Split helpers ────────────────────────────────────────────────────────
-  const equalShare = lastSpend && selectedMembers.length > 0
-    ? lastSpend.amount / selectedMembers.length
-    : 0;
-
+  const equalShare = lastSpend && selectedMembers.length > 0 ? lastSpend.amount / selectedMembers.length : 0;
   const customTotal = Object.values(customSplits).reduce((s, v) => s + (parseFloat(v) || 0), 0);
   const customRemaining = lastSpend ? lastSpend.amount - customTotal : 0;
 
@@ -133,16 +149,13 @@ export default function WalletScreen() {
   };
 
   const toggleMember = (uid: string) => {
-    setSelectedMembers((prev) =>
-      prev.includes(uid) ? prev.filter((x) => x !== uid) : [...prev, uid]
-    );
+    setSelectedMembers((prev) => prev.includes(uid) ? prev.filter((x) => x !== uid) : [...prev, uid]);
   };
 
   const confirmSplit = async () => {
     if (!lastSpend || selectedMembers.length === 0) return;
     setSaving(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-
     const splits = group.members
       .filter((m) => selectedMembers.includes(m.id))
       .map((m) => ({
@@ -150,30 +163,20 @@ export default function WalletScreen() {
         amount: splitType === "equal" ? equalShare : (parseFloat(customSplits[m.id]) || 0),
         settled: m.id === "me",
       }));
-
     await addExpense({
-      groupId: group.id,
-      title: lastSpend.description,
-      amount: lastSpend.amount,
-      paidBy: "me",
-      paidByName: "You",
-      splits,
-      date: new Date().toISOString().split("T")[0],
-      category: lastSpend.category,
+      groupId: group.id, title: lastSpend.description, amount: lastSpend.amount,
+      paidBy: "me", paidByName: "You", splits,
+      date: new Date().toISOString().split("T")[0], category: lastSpend.category,
     });
-
-    // Notify each member their share
     for (const m of group.members.filter((m) => selectedMembers.includes(m.id) && m.id !== "me")) {
       const share = splitType === "equal" ? equalShare : (parseFloat(customSplits[m.id]) || 0);
       await addNotification({
         type: "split_request",
         title: `${m.name} owes ₹${share.toFixed(0)}`,
-        body: `Wallet expense "${lastSpend.description}" — ${m.name}'s share is ₹${share.toFixed(0)} (total ₹${lastSpend.amount.toFixed(0)})`,
-        amount: share,
-        groupId: group.id,
+        body: `Wallet expense "${lastSpend.description}" — ${m.name}'s share is ₹${share.toFixed(0)}`,
+        amount: share, groupId: group.id,
       });
     }
-
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setSaving(false);
     setShowSplitModal(false);
@@ -184,7 +187,6 @@ export default function WalletScreen() {
   const handleAddFunds = async () => {
     if (!fundAmount) return;
     setSaving(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     try {
       const amt = parseFloat(fundAmount);
       const result = await addWalletContribution(group.id, amt, "You", "me");
@@ -193,19 +195,8 @@ export default function WalletScreen() {
         type: "payment_received",
         title: `₹${amt.toFixed(0)} added to ${ws.name}`,
         body: `You contributed ₹${amt.toFixed(0)} to the shared wallet`,
-        amount: amt,
-        groupId: group.id,
+        amount: amt, groupId: group.id,
       });
-      const newBalance = group.walletBalance + amt;
-      if (ws.alertEnabled && newBalance < ws.minBalanceAlert) {
-        await addNotification({
-          type: "reminder",
-          title: "Low Wallet Balance",
-          body: `${ws.name} balance is ₹${newBalance.toFixed(0)}, below the ₹${ws.minBalanceAlert} alert threshold`,
-          amount: newBalance,
-          groupId: group.id,
-        });
-      }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setFundAmount("");
       setShowAddFunds(false);
@@ -214,51 +205,101 @@ export default function WalletScreen() {
     }
   };
 
-  // ─── Spend (then open split flow) ─────────────────────────────────────────
-  const handleSpend = async () => {
-    if (!spendAmount || !spendDesc) return;
-    setSaving(true);
+  // ─── QR simulation ────────────────────────────────────────────────────────
+  const simulateQRScan = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    setQrScanned(false);
+    setTimeout(() => {
+      const fakeVendors = [
+        { name: "Swiggy Food", upi: "swiggy@icici" },
+        { name: "Big Bazaar", upi: "bigbazaar@sbi" },
+        { name: "Ola Cabs", upi: "ola@paytm" },
+        { name: "Blinkit", upi: "blinkit@hdfc" },
+      ];
+      const v = fakeVendors[Math.floor(Math.random() * fakeVendors.length)];
+      setQrInfo(v);
+      setPayNote(`Payment to ${v.name}`);
+      setQrScanned(true);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }, 1500);
+  };
+
+  // ─── Validate recipient for each method ───────────────────────────────────
+  const isRecipientValid = () => {
+    if (!payMethod) return false;
+    if (payMethod === "qr") return qrScanned && !!qrInfo;
+    if (payMethod === "phone") return payPhone.length === 10;
+    if (payMethod === "upi") return payUPI.includes("@");
+    if (payMethod === "bank") return payBankAcc.length >= 9 && payBankIFSC.length === 11;
+    if (payMethod === "contact") return !!payContact;
+    return false;
+  };
+
+  const getRecipientName = () => {
+    if (payMethod === "qr" && qrInfo) return qrInfo.name;
+    if (payMethod === "phone") return `+91 ${payPhone}`;
+    if (payMethod === "upi") return payUPI;
+    if (payMethod === "bank") return `A/c ${payBankAcc}`;
+    if (payMethod === "contact") return payContact?.name ?? "";
+    return "Recipient";
+  };
+
+  // ─── Process wallet payment ───────────────────────────────────────────────
+  const handleWalletPay = async () => {
+    if (!payAmount || !isRecipientValid()) return;
+    setPayProcessing(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    await new Promise((r) => setTimeout(r, 1400));
     try {
-      const amt = parseFloat(spendAmount);
-      const result = await spendFromWallet(group.id, amt, spendDesc, spendCategory, "You", "me");
+      const amt = parseFloat(payAmount);
+      const desc = payNote || `Payment to ${getRecipientName()}`;
+      const result = await spendFromWallet(group.id, amt, desc, payCategory, "You", "me");
       if (!result.success) {
         await addNotification({
           type: "reminder",
-          title: "Transaction Blocked",
-          body: result.error ?? "Could not complete wallet transaction",
+          title: "Payment Failed",
+          body: result.error ?? "Could not complete payment",
           groupId: group.id,
         });
-        setSaving(false);
+        setPayProcessing(false);
         return;
       }
+      setPaySuccess(true);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       await addNotification({
-        type: "split_request",
-        title: `₹${amt.toFixed(0)} spent from ${ws.name}`,
-        body: `You spent ₹${amt.toFixed(0)} on "${spendDesc}" from the shared wallet`,
-        amount: amt,
-        groupId: group.id,
+        type: "payment_received",
+        title: `₹${amt.toFixed(0)} paid via ${PAY_METHODS.find((p) => p.id === payMethod)?.label}`,
+        body: `Paid ₹${amt.toFixed(0)} to ${getRecipientName()} from ${ws.name}`,
+        amount: amt, groupId: group.id,
       });
       const newBalance = group.walletBalance - amt;
       if (ws.alertEnabled && newBalance < ws.minBalanceAlert) {
         await addNotification({
           type: "reminder",
           title: "⚠️ Low Wallet Balance",
-          body: `${ws.name} is below ₹${ws.minBalanceAlert}! Current: ₹${newBalance.toFixed(0)}`,
-          amount: newBalance,
-          groupId: group.id,
+          body: `${ws.name} balance: ₹${newBalance.toFixed(0)} (below ₹${ws.minBalanceAlert} threshold)`,
+          amount: newBalance, groupId: group.id,
         });
       }
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      // Close spend modal, open split flow
-      const spend = { amount: amt, description: spendDesc, category: spendCategory };
-      setSpendAmount("");
-      setSpendDesc("");
-      setShowSpend(false);
-      // Small delay so sheet animates out before split modal animates in
+      const spend: LastSpend = { amount: amt, description: desc, category: payCategory, recipient: getRecipientName() };
+      await new Promise((r) => setTimeout(r, 900));
+      // Reset pay hub
+      setPaySuccess(false);
+      setPayProcessing(false);
+      setPayAmount("");
+      setPayNote("");
+      setPayPhone("");
+      setPayUPI("");
+      setPayBankAcc("");
+      setPayBankIFSC("");
+      setPayContact(null);
+      setQrScanned(false);
+      setQrInfo(null);
+      setPayMethod(null);
+      setShowPayHub(false);
       setTimeout(() => openSplitFlow(spend), 350);
-    } finally {
-      setSaving(false);
+    } catch {
+      setPayProcessing(false);
     }
   };
 
@@ -274,8 +315,7 @@ export default function WalletScreen() {
 
   const handleRoleToggle = async (userId: string, currentRole: "admin" | "member") => {
     if (userId === "me") return;
-    const newRole = currentRole === "admin" ? "member" : "admin";
-    await updateWalletMember(group.id, userId, { role: newRole });
+    await updateWalletMember(group.id, userId, { role: currentRole === "admin" ? "member" : "admin" });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   };
 
@@ -284,7 +324,7 @@ export default function WalletScreen() {
     await addNotification({
       type: "reminder",
       title: frozen ? "Wallet Frozen" : "Wallet Unfrozen",
-      body: frozen ? `${ws.name} has been frozen. No transactions allowed.` : `${ws.name} is active again.`,
+      body: frozen ? `${ws.name} has been frozen.` : `${ws.name} is active again.`,
       groupId: group.id,
     });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -298,6 +338,8 @@ export default function WalletScreen() {
     { key: "settings", icon: "settings", label: "Settings" },
   ];
 
+  const selectedMethodMeta = PAY_METHODS.find((p) => p.id === payMethod);
+
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
       {/* Header */}
@@ -306,9 +348,7 @@ export default function WalletScreen() {
           <Feather name="arrow-left" size={22} color={colors.text} />
         </Pressable>
         <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>
-            {ws.name || group.name}
-          </Text>
+          <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>{ws.name || group.name}</Text>
           <View style={styles.headerStatusRow}>
             {ws.frozen && (
               <View style={[styles.frozenBadge, { backgroundColor: colors.warning + "22" }]}>
@@ -329,9 +369,9 @@ export default function WalletScreen() {
               <Feather name="plus" size={14} color={colors.success} />
               <Text style={[styles.headerBtnText, { color: colors.success }]}>Add</Text>
             </Pressable>
-            <Pressable style={[styles.headerBtn, { backgroundColor: colors.primary + "18" }]} onPress={() => setShowSpend(true)}>
-              <Feather name="arrow-up-right" size={14} color={colors.primary} />
-              <Text style={[styles.headerBtnText, { color: colors.primary }]}>Spend</Text>
+            <Pressable style={[styles.headerBtn, { backgroundColor: colors.primary }]} onPress={() => { setPayMethod(null); setShowPayHub(true); }}>
+              <Feather name="zap" size={14} color="#fff" />
+              <Text style={[styles.headerBtnText, { color: "#fff" }]}>Pay</Text>
             </Pressable>
           </View>
         )}
@@ -345,14 +385,12 @@ export default function WalletScreen() {
         <Text style={[styles.heroBalance, { color: ws.frozen ? colors.warning : "#fff" }]}>
           ₹{group.walletBalance.toLocaleString("en-IN")}
         </Text>
-        <View style={styles.heroProgress}>
-          <View style={[styles.progressTrack, { backgroundColor: ws.frozen ? colors.warning + "33" : "rgba(255,255,255,0.25)" }]}>
-            <View style={[styles.progressFill, { width: `${pct}%` as any, backgroundColor: ws.frozen ? colors.warning : "#fff" }]} />
-          </View>
-          <Text style={[styles.progressLabel, { color: ws.frozen ? colors.warning : "rgba(255,255,255,0.75)" }]}>
-            ₹{group.walletBalance.toLocaleString("en-IN")} / ₹{group.walletLimit.toLocaleString("en-IN")} limit
-          </Text>
+        <View style={[styles.progressTrack, { backgroundColor: ws.frozen ? colors.warning + "33" : "rgba(255,255,255,0.25)" }]}>
+          <View style={[styles.progressFill, { width: `${pct}%` as any, backgroundColor: ws.frozen ? colors.warning : "#fff" }]} />
         </View>
+        <Text style={[styles.progressLabel, { color: ws.frozen ? colors.warning : "rgba(255,255,255,0.75)" }]}>
+          ₹{group.walletBalance.toLocaleString("en-IN")} / ₹{group.walletLimit.toLocaleString("en-IN")} limit
+        </Text>
         {ws.alertEnabled && group.walletBalance < ws.minBalanceAlert && (
           <View style={styles.alertBanner}>
             <Feather name="alert-triangle" size={12} color="#fff" />
@@ -360,44 +398,56 @@ export default function WalletScreen() {
           </View>
         )}
         <View style={styles.heroStats}>
-          <View style={styles.heroStat}>
-            <Text style={[styles.heroStatVal, { color: ws.frozen ? colors.warning : "#fff" }]}>₹{totalContributions.toLocaleString("en-IN")}</Text>
-            <Text style={[styles.heroStatLabel, { color: ws.frozen ? colors.warning + "88" : "rgba(255,255,255,0.65)" }]}>Total In</Text>
-          </View>
-          <View style={[styles.heroStatDivider, { backgroundColor: ws.frozen ? colors.warning + "44" : "rgba(255,255,255,0.3)" }]} />
-          <View style={styles.heroStat}>
-            <Text style={[styles.heroStatVal, { color: ws.frozen ? colors.warning : "#fff" }]}>₹{totalSpent.toLocaleString("en-IN")}</Text>
-            <Text style={[styles.heroStatLabel, { color: ws.frozen ? colors.warning + "88" : "rgba(255,255,255,0.65)" }]}>Total Spent</Text>
-          </View>
-          <View style={[styles.heroStatDivider, { backgroundColor: ws.frozen ? colors.warning + "44" : "rgba(255,255,255,0.3)" }]} />
-          <View style={styles.heroStat}>
-            <Text style={[styles.heroStatVal, { color: ws.frozen ? colors.warning : "#fff" }]}>{group.members.length}</Text>
-            <Text style={[styles.heroStatLabel, { color: ws.frozen ? colors.warning + "88" : "rgba(255,255,255,0.65)" }]}>Members</Text>
-          </View>
+          {[
+            { label: "Total In", val: `₹${totalContributions.toLocaleString("en-IN")}` },
+            { label: "Total Spent", val: `₹${totalSpent.toLocaleString("en-IN")}` },
+            { label: "Members", val: `${group.members.length}` },
+          ].map((s, i, arr) => (
+            <React.Fragment key={s.label}>
+              <View style={styles.heroStat}>
+                <Text style={[styles.heroStatVal, { color: ws.frozen ? colors.warning : "#fff" }]}>{s.val}</Text>
+                <Text style={[styles.heroStatLabel, { color: ws.frozen ? colors.warning + "88" : "rgba(255,255,255,0.65)" }]}>{s.label}</Text>
+              </View>
+              {i < arr.length - 1 && <View style={[styles.heroStatDivider, { backgroundColor: ws.frozen ? colors.warning + "44" : "rgba(255,255,255,0.3)" }]} />}
+            </React.Fragment>
+          ))}
         </View>
       </View>
 
       {/* Tab strip */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={styles.tabStrip}>
         {TABS.map((t) => (
-          <Pressable
-            key={t.key}
-            style={[styles.tabItem, tab === t.key && { backgroundColor: colors.primary }]}
-            onPress={() => setTab(t.key)}
-          >
+          <Pressable key={t.key} style={[styles.tabItem, tab === t.key && { backgroundColor: colors.primary }]} onPress={() => setTab(t.key)}>
             <Feather name={t.icon as any} size={14} color={tab === t.key ? "#fff" : colors.mutedForeground} />
             <Text style={[styles.tabItemText, { color: tab === t.key ? "#fff" : colors.mutedForeground }]}>{t.label}</Text>
           </Pressable>
         ))}
       </ScrollView>
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: (Platform.OS === "web" ? 34 : insets.bottom) + 80, paddingTop: 12 }}
-      >
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: (Platform.OS === "web" ? 34 : insets.bottom) + 80, paddingTop: 12 }}>
+
         {/* OVERVIEW */}
         {tab === "overview" && (
           <View style={{ paddingHorizontal: 16, gap: 14 }}>
+            {/* Pay shortcuts */}
+            <View style={styles.payShortcutRow}>
+              {PAY_METHODS.map((m) => (
+                <Pressable
+                  key={m.id}
+                  style={[styles.payShortcut, { backgroundColor: m.color + "18" }]}
+                  onPress={() => { setPayMethod(m.id); setShowPayHub(true); }}
+                >
+                  <View style={[styles.payShortcutIcon, { backgroundColor: m.color + "28" }]}>
+                    {m.iconLib === "mci"
+                      ? <MaterialCommunityIcons name={m.icon as any} size={18} color={m.color} />
+                      : <Feather name={m.icon as any} size={18} color={m.color} />
+                    }
+                  </View>
+                  <Text style={[styles.payShortcutLabel, { color: m.color }]} numberOfLines={1}>{m.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+
             <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>RECENT ACTIVITY</Text>
             {group.walletTransactions.slice(0, 6).map((tx) => (
               <View key={tx.id} style={[styles.txRow, { backgroundColor: colors.card }]}>
@@ -421,9 +471,7 @@ export default function WalletScreen() {
             )}
             <View style={[styles.descCard, { backgroundColor: colors.card }]}>
               <Feather name="info" size={16} color={colors.primary} />
-              <Text style={[styles.descText, { color: colors.mutedForeground }]}>
-                {ws.description || "No description set for this wallet."}
-              </Text>
+              <Text style={[styles.descText, { color: colors.mutedForeground }]}>{ws.description || "No description set."}</Text>
             </View>
           </View>
         )}
@@ -444,9 +492,7 @@ export default function WalletScreen() {
                     <View style={styles.memberNameRow}>
                       <Text style={[styles.memberName, { color: colors.text }]}>{m.id === "me" ? "You" : m.name}</Text>
                       <View style={[styles.roleBadge, { backgroundColor: wm.role === "admin" ? colors.primary + "22" : colors.success + "16" }]}>
-                        <Text style={[styles.roleText, { color: wm.role === "admin" ? colors.primary : colors.success }]}>
-                          {wm.role === "admin" ? "Admin" : "Member"}
-                        </Text>
+                        <Text style={[styles.roleText, { color: wm.role === "admin" ? colors.primary : colors.success }]}>{wm.role === "admin" ? "Admin" : "Member"}</Text>
                       </View>
                     </View>
                     <View style={styles.memberStats}>
@@ -457,27 +503,12 @@ export default function WalletScreen() {
                       <View style={[styles.contribFill, { width: `${contribPct}%` as any, backgroundColor: m.color }]} />
                     </View>
                     <View style={styles.memberLimits}>
-                      {wm.spendingLimit > 0 && (
-                        <Text style={[styles.limitChip, { color: colors.warning, backgroundColor: colors.warning + "16" }]}>
-                          Limit ₹{wm.spendingLimit.toLocaleString("en-IN")}
-                        </Text>
-                      )}
-                      {wm.dailyLimit > 0 && (
-                        <Text style={[styles.limitChip, { color: colors.primary, backgroundColor: colors.primary + "16" }]}>
-                          Daily ₹{wm.dailyLimit.toLocaleString("en-IN")}
-                        </Text>
-                      )}
+                      {wm.spendingLimit > 0 && <Text style={[styles.limitChip, { color: colors.warning, backgroundColor: colors.warning + "16" }]}>Limit ₹{wm.spendingLimit.toLocaleString("en-IN")}</Text>}
+                      {wm.dailyLimit > 0 && <Text style={[styles.limitChip, { color: colors.primary, backgroundColor: colors.primary + "16" }]}>Daily ₹{wm.dailyLimit.toLocaleString("en-IN")}</Text>}
                     </View>
                   </View>
                   {isAdmin && m.id !== "me" && (
-                    <Pressable
-                      style={[styles.editMemberBtn, { backgroundColor: colors.accent }]}
-                      onPress={() => {
-                        setShowEditMember(wm);
-                        setEditSpendLimit(wm.spendingLimit > 0 ? wm.spendingLimit.toString() : "");
-                        setEditDailyLimit(wm.dailyLimit > 0 ? wm.dailyLimit.toString() : "");
-                      }}
-                    >
+                    <Pressable style={[styles.editMemberBtn, { backgroundColor: colors.accent }]} onPress={() => { setShowEditMember(wm); setEditSpendLimit(wm.spendingLimit > 0 ? wm.spendingLimit.toString() : ""); setEditDailyLimit(wm.dailyLimit > 0 ? wm.dailyLimit.toString() : ""); }}>
                       <Feather name="edit-2" size={14} color={colors.primary} />
                     </Pressable>
                   )}
@@ -492,44 +523,31 @@ export default function WalletScreen() {
           <View style={{ paddingHorizontal: 16, gap: 10 }}>
             <View style={styles.filterRow}>
               {(["all", "credit", "debit"] as const).map((f) => (
-                <Pressable
-                  key={f}
-                  style={[styles.filterBtn, { backgroundColor: txFilter === f ? colors.primary : colors.card }]}
-                  onPress={() => setTxFilter(f)}
-                >
-                  <Text style={[styles.filterText, { color: txFilter === f ? "#fff" : colors.mutedForeground }]}>
-                    {f === "all" ? "All" : f === "credit" ? "Money In" : "Money Out"}
-                  </Text>
+                <Pressable key={f} style={[styles.filterBtn, { backgroundColor: txFilter === f ? colors.primary : colors.card }]} onPress={() => setTxFilter(f)}>
+                  <Text style={[styles.filterText, { color: txFilter === f ? "#fff" : colors.mutedForeground }]}>{f === "all" ? "All" : f === "credit" ? "Money In" : "Money Out"}</Text>
                 </Pressable>
               ))}
             </View>
             {filteredTxs.length === 0 ? (
-              <View style={styles.empty}>
-                <Feather name="list" size={32} color={colors.mutedForeground} />
-                <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No transactions</Text>
-              </View>
-            ) : (
-              filteredTxs.map((tx) => (
-                <View key={tx.id} style={[styles.txCard, { backgroundColor: colors.card }]}>
-                  <View style={[styles.txCardIcon, { backgroundColor: (tx.type === "credit" ? colors.success : colors.destructive) + "18" }]}>
-                    <Feather name={(CATEGORY_ICONS[tx.category] ?? "circle") as any} size={18} color={tx.type === "credit" ? colors.success : colors.destructive} />
-                  </View>
-                  <View style={{ flex: 1, gap: 3 }}>
-                    <Text style={[styles.txCardDesc, { color: colors.text }]}>{tx.description}</Text>
-                    <Text style={[styles.txCardBy, { color: colors.mutedForeground }]}>{tx.by}</Text>
-                    <View style={styles.txCardMeta}>
-                      <View style={[styles.catChip, { backgroundColor: colors.accent }]}>
-                        <Text style={[styles.catChipText, { color: colors.primary }]}>{tx.category}</Text>
-                      </View>
-                      <Text style={[styles.txCardDate, { color: colors.mutedForeground }]}>{formatTs(tx.timestamp)}</Text>
-                    </View>
-                  </View>
-                  <Text style={[styles.txCardAmount, { color: tx.type === "credit" ? colors.success : colors.destructive }]}>
-                    {tx.type === "credit" ? "+" : "-"}₹{tx.amount.toLocaleString("en-IN")}
-                  </Text>
+              <View style={styles.empty}><Feather name="list" size={32} color={colors.mutedForeground} /><Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No transactions</Text></View>
+            ) : filteredTxs.map((tx) => (
+              <View key={tx.id} style={[styles.txCard, { backgroundColor: colors.card }]}>
+                <View style={[styles.txCardIcon, { backgroundColor: (tx.type === "credit" ? colors.success : colors.destructive) + "18" }]}>
+                  <Feather name={(CATEGORY_ICONS[tx.category] ?? "circle") as any} size={18} color={tx.type === "credit" ? colors.success : colors.destructive} />
                 </View>
-              ))
-            )}
+                <View style={{ flex: 1, gap: 3 }}>
+                  <Text style={[styles.txCardDesc, { color: colors.text }]}>{tx.description}</Text>
+                  <Text style={[styles.txCardBy, { color: colors.mutedForeground }]}>{tx.by}</Text>
+                  <View style={styles.txCardMeta}>
+                    <View style={[styles.catChip, { backgroundColor: colors.accent }]}><Text style={[styles.catChipText, { color: colors.primary }]}>{tx.category}</Text></View>
+                    <Text style={[styles.txCardDate, { color: colors.mutedForeground }]}>{formatTs(tx.timestamp)}</Text>
+                  </View>
+                </View>
+                <Text style={[styles.txCardAmount, { color: tx.type === "credit" ? colors.success : colors.destructive }]}>
+                  {tx.type === "credit" ? "+" : "-"}₹{tx.amount.toLocaleString("en-IN")}
+                </Text>
+              </View>
+            ))}
           </View>
         )}
 
@@ -544,47 +562,18 @@ export default function WalletScreen() {
                 const pctVal = totalContributions > 0 ? (wm.totalContributed / totalContributions) * 100 : 0;
                 return (
                   <View key={m.id} style={styles.analyticsRow}>
-                    <View style={[styles.analyticsAvatar, { backgroundColor: m.color + "22" }]}>
-                      <Text style={[styles.analyticsInitials, { color: m.color }]}>{m.initials}</Text>
-                    </View>
+                    <View style={[styles.analyticsAvatar, { backgroundColor: m.color + "22" }]}><Text style={[styles.analyticsInitials, { color: m.color }]}>{m.initials}</Text></View>
                     <View style={{ flex: 1, gap: 4 }}>
                       <View style={styles.analyticsNameRow}>
                         <Text style={[styles.analyticsName, { color: colors.text }]}>{m.id === "me" ? "You" : m.name}</Text>
                         <Text style={[styles.analyticsPct, { color: colors.mutedForeground }]}>{pctVal.toFixed(0)}%</Text>
                       </View>
-                      <View style={[styles.analyticsBg, { backgroundColor: colors.secondary }]}>
-                        <View style={[styles.analyticsBar, { width: `${pctVal}%` as any, backgroundColor: m.color }]} />
-                      </View>
+                      <View style={[styles.analyticsBg, { backgroundColor: colors.secondary }]}><View style={[styles.analyticsBar, { width: `${pctVal}%` as any, backgroundColor: m.color }]} /></View>
                       <Text style={[styles.analyticsAmount, { color: colors.mutedForeground }]}>₹{wm.totalContributed.toLocaleString("en-IN")}</Text>
                     </View>
                   </View>
                 );
               })}
-            </View>
-            <View style={[styles.analyticsCard, { backgroundColor: colors.card }]}>
-              <Text style={[styles.analyticsTitle, { color: colors.text }]}>Spending by Member</Text>
-              {group.members.map((m) => {
-                const wm = group.walletMembers.find((w) => w.userId === m.id);
-                if (!wm || wm.totalSpent === 0) return null;
-                const pctVal = totalSpent > 0 ? (wm.totalSpent / totalSpent) * 100 : 0;
-                return (
-                  <View key={m.id} style={styles.analyticsRow}>
-                    <View style={[styles.analyticsAvatar, { backgroundColor: m.color + "22" }]}>
-                      <Text style={[styles.analyticsInitials, { color: m.color }]}>{m.initials}</Text>
-                    </View>
-                    <View style={{ flex: 1, gap: 4 }}>
-                      <View style={styles.analyticsNameRow}>
-                        <Text style={[styles.analyticsName, { color: colors.text }]}>{m.id === "me" ? "You" : m.name}</Text>
-                        <Text style={[styles.analyticsPct, { color: colors.destructive }]}>₹{wm.totalSpent.toLocaleString("en-IN")}</Text>
-                      </View>
-                      <View style={[styles.analyticsBg, { backgroundColor: colors.secondary }]}>
-                        <View style={[styles.analyticsBar, { width: `${pctVal}%` as any, backgroundColor: colors.destructive }]} />
-                      </View>
-                    </View>
-                  </View>
-                );
-              })}
-              {totalSpent === 0 && <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>No spending yet</Text>}
             </View>
             {categorySpending.length > 0 && (
               <View style={[styles.analyticsCard, { backgroundColor: colors.card }]}>
@@ -593,17 +582,13 @@ export default function WalletScreen() {
                   const pctVal = totalSpent > 0 ? (amt / totalSpent) * 100 : 0;
                   return (
                     <View key={cat} style={styles.analyticsRow}>
-                      <View style={[styles.catIconBox, { backgroundColor: colors.primary + "18" }]}>
-                        <Feather name={(CATEGORY_ICONS[cat] ?? "circle") as any} size={16} color={colors.primary} />
-                      </View>
+                      <View style={[styles.catIconBox, { backgroundColor: colors.primary + "18" }]}><Feather name={(CATEGORY_ICONS[cat] ?? "circle") as any} size={16} color={colors.primary} /></View>
                       <View style={{ flex: 1, gap: 4 }}>
                         <View style={styles.analyticsNameRow}>
                           <Text style={[styles.analyticsName, { color: colors.text }]}>{cat}</Text>
                           <Text style={[styles.analyticsPct, { color: colors.mutedForeground }]}>{pctVal.toFixed(0)}%</Text>
                         </View>
-                        <View style={[styles.analyticsBg, { backgroundColor: colors.secondary }]}>
-                          <View style={[styles.analyticsBar, { width: `${pctVal}%` as any, backgroundColor: colors.primary }]} />
-                        </View>
+                        <View style={[styles.analyticsBg, { backgroundColor: colors.secondary }]}><View style={[styles.analyticsBar, { width: `${pctVal}%` as any, backgroundColor: colors.primary }]} /></View>
                         <Text style={[styles.analyticsAmount, { color: colors.mutedForeground }]}>₹{amt.toLocaleString("en-IN")}</Text>
                       </View>
                     </View>
@@ -612,20 +597,11 @@ export default function WalletScreen() {
               </View>
             )}
             <View style={[styles.summaryGrid, { backgroundColor: colors.card }]}>
-              <View style={styles.summaryCell}>
-                <Text style={[styles.summaryCellVal, { color: colors.success }]}>₹{totalContributions.toLocaleString("en-IN")}</Text>
-                <Text style={[styles.summaryCellLabel, { color: colors.mutedForeground }]}>Total Contributed</Text>
-              </View>
+              <View style={styles.summaryCell}><Text style={[styles.summaryCellVal, { color: colors.success }]}>₹{totalContributions.toLocaleString("en-IN")}</Text><Text style={[styles.summaryCellLabel, { color: colors.mutedForeground }]}>Contributed</Text></View>
               <View style={[styles.summaryCellDivider, { backgroundColor: colors.border }]} />
-              <View style={styles.summaryCell}>
-                <Text style={[styles.summaryCellVal, { color: colors.destructive }]}>₹{totalSpent.toLocaleString("en-IN")}</Text>
-                <Text style={[styles.summaryCellLabel, { color: colors.mutedForeground }]}>Total Spent</Text>
-              </View>
+              <View style={styles.summaryCell}><Text style={[styles.summaryCellVal, { color: colors.destructive }]}>₹{totalSpent.toLocaleString("en-IN")}</Text><Text style={[styles.summaryCellLabel, { color: colors.mutedForeground }]}>Spent</Text></View>
               <View style={[styles.summaryCellDivider, { backgroundColor: colors.border }]} />
-              <View style={styles.summaryCell}>
-                <Text style={[styles.summaryCellVal, { color: colors.primary }]}>₹{group.walletBalance.toLocaleString("en-IN")}</Text>
-                <Text style={[styles.summaryCellLabel, { color: colors.mutedForeground }]}>Remaining</Text>
-              </View>
+              <View style={styles.summaryCell}><Text style={[styles.summaryCellVal, { color: colors.primary }]}>₹{group.walletBalance.toLocaleString("en-IN")}</Text><Text style={[styles.summaryCellLabel, { color: colors.mutedForeground }]}>Remaining</Text></View>
             </View>
           </View>
         )}
@@ -643,70 +619,30 @@ export default function WalletScreen() {
               <Text style={[styles.settingGroupTitle, { color: colors.text }]}>Wallet Info</Text>
               <View style={styles.settingRow}>
                 <Text style={[styles.settingLabel, { color: colors.mutedForeground }]}>Name</Text>
-                <TextInput
-                  style={[styles.settingInput, { color: colors.text, backgroundColor: colors.secondary, borderColor: colors.border }]}
-                  value={ws.name}
-                  onChangeText={(v) => isAdmin && updateWalletSettings(group.id, { name: v })}
-                  editable={isAdmin}
-                  placeholderTextColor={colors.mutedForeground}
-                />
+                <TextInput style={[styles.settingInput, { color: colors.text, backgroundColor: colors.secondary, borderColor: colors.border }]} value={ws.name} onChangeText={(v) => isAdmin && updateWalletSettings(group.id, { name: v })} editable={isAdmin} placeholderTextColor={colors.mutedForeground} />
               </View>
               <View style={styles.settingRow}>
                 <Text style={[styles.settingLabel, { color: colors.mutedForeground }]}>Description</Text>
-                <TextInput
-                  style={[styles.settingInput, { color: colors.text, backgroundColor: colors.secondary, borderColor: colors.border }]}
-                  value={ws.description}
-                  onChangeText={(v) => isAdmin && updateWalletSettings(group.id, { description: v })}
-                  editable={isAdmin}
-                  placeholder="Describe this wallet"
-                  placeholderTextColor={colors.mutedForeground}
-                />
+                <TextInput style={[styles.settingInput, { color: colors.text, backgroundColor: colors.secondary, borderColor: colors.border }]} value={ws.description} onChangeText={(v) => isAdmin && updateWalletSettings(group.id, { description: v })} editable={isAdmin} placeholder="Describe this wallet" placeholderTextColor={colors.mutedForeground} />
               </View>
             </View>
             <View style={[styles.settingSection, { backgroundColor: colors.card }]}>
-              <Text style={[styles.settingGroupTitle, { color: colors.text }]}>Spending Limits</Text>
+              <Text style={[styles.settingGroupTitle, { color: colors.text }]}>Limits</Text>
               <View style={styles.settingRow}>
-                <View>
-                  <Text style={[styles.settingLabel, { color: colors.text }]}>Max Transaction Amount</Text>
-                  <Text style={[styles.settingHint, { color: colors.mutedForeground }]}>0 = no limit</Text>
-                </View>
-                <TextInput
-                  style={[styles.settingInputSm, { color: colors.text, backgroundColor: colors.secondary, borderColor: colors.border }]}
-                  value={ws.maxTxAmount > 0 ? ws.maxTxAmount.toString() : ""}
-                  onChangeText={(v) => isAdmin && updateWalletSettings(group.id, { maxTxAmount: parseFloat(v) || 0 })}
-                  keyboardType="numeric"
-                  editable={isAdmin}
-                  placeholder="₹0"
-                  placeholderTextColor={colors.mutedForeground}
-                />
+                <View><Text style={[styles.settingLabel, { color: colors.text }]}>Max Transaction</Text><Text style={[styles.settingHint, { color: colors.mutedForeground }]}>0 = no limit</Text></View>
+                <TextInput style={[styles.settingInputSm, { color: colors.text, backgroundColor: colors.secondary, borderColor: colors.border }]} value={ws.maxTxAmount > 0 ? ws.maxTxAmount.toString() : ""} onChangeText={(v) => isAdmin && updateWalletSettings(group.id, { maxTxAmount: parseFloat(v) || 0 })} keyboardType="numeric" editable={isAdmin} placeholder="₹0" placeholderTextColor={colors.mutedForeground} />
               </View>
             </View>
             <View style={[styles.settingSection, { backgroundColor: colors.card }]}>
               <Text style={[styles.settingGroupTitle, { color: colors.text }]}>Low Balance Alert</Text>
               <View style={styles.settingRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.settingLabel, { color: colors.text }]}>Enable alerts</Text>
-                  <Text style={[styles.settingHint, { color: colors.mutedForeground }]}>Notify when balance drops below threshold</Text>
-                </View>
-                <Switch
-                  value={ws.alertEnabled}
-                  onValueChange={(v) => isAdmin && updateWalletSettings(group.id, { alertEnabled: v })}
-                  disabled={!isAdmin}
-                  trackColor={{ true: colors.primary, false: colors.border }}
-                />
+                <View style={{ flex: 1 }}><Text style={[styles.settingLabel, { color: colors.text }]}>Enable alerts</Text><Text style={[styles.settingHint, { color: colors.mutedForeground }]}>Notify when balance drops</Text></View>
+                <Switch value={ws.alertEnabled} onValueChange={(v) => isAdmin && updateWalletSettings(group.id, { alertEnabled: v })} disabled={!isAdmin} trackColor={{ true: colors.primary, false: colors.border }} />
               </View>
               {ws.alertEnabled && (
                 <View style={styles.settingRow}>
                   <Text style={[styles.settingLabel, { color: colors.text }]}>Alert below ₹</Text>
-                  <TextInput
-                    style={[styles.settingInputSm, { color: colors.text, backgroundColor: colors.secondary, borderColor: colors.border }]}
-                    value={ws.minBalanceAlert > 0 ? ws.minBalanceAlert.toString() : ""}
-                    onChangeText={(v) => isAdmin && updateWalletSettings(group.id, { minBalanceAlert: parseFloat(v) || 0 })}
-                    keyboardType="numeric"
-                    editable={isAdmin}
-                    placeholder="500"
-                    placeholderTextColor={colors.mutedForeground}
-                  />
+                  <TextInput style={[styles.settingInputSm, { color: colors.text, backgroundColor: colors.secondary, borderColor: colors.border }]} value={ws.minBalanceAlert > 0 ? ws.minBalanceAlert.toString() : ""} onChangeText={(v) => isAdmin && updateWalletSettings(group.id, { minBalanceAlert: parseFloat(v) || 0 })} keyboardType="numeric" editable={isAdmin} placeholder="500" placeholderTextColor={colors.mutedForeground} />
                 </View>
               )}
             </View>
@@ -714,15 +650,8 @@ export default function WalletScreen() {
               <View style={[styles.settingSection, { backgroundColor: colors.card }]}>
                 <Text style={[styles.settingGroupTitle, { color: colors.text }]}>Wallet Control</Text>
                 <View style={styles.settingRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.settingLabel, { color: colors.text }]}>Freeze Wallet</Text>
-                    <Text style={[styles.settingHint, { color: colors.mutedForeground }]}>Block all transactions</Text>
-                  </View>
-                  <Switch
-                    value={ws.frozen}
-                    onValueChange={handleFreeze}
-                    trackColor={{ true: colors.warning, false: colors.border }}
-                  />
+                  <View style={{ flex: 1 }}><Text style={[styles.settingLabel, { color: colors.text }]}>Freeze Wallet</Text><Text style={[styles.settingHint, { color: colors.mutedForeground }]}>Block all transactions</Text></View>
+                  <Switch value={ws.frozen} onValueChange={handleFreeze} trackColor={{ true: colors.warning, false: colors.border }} />
                 </View>
               </View>
             )}
@@ -730,7 +659,7 @@ export default function WalletScreen() {
         )}
       </ScrollView>
 
-      {/* ─── Add Funds Modal ───────────────────────────────────────────────── */}
+      {/* ═══════════════════════ ADD FUNDS MODAL ══════════════════════════════ */}
       <Modal visible={showAddFunds} transparent animationType="slide">
         <View style={styles.overlay}>
           <View style={[styles.sheet, { backgroundColor: colors.card }]}>
@@ -738,15 +667,7 @@ export default function WalletScreen() {
             <Text style={[styles.sheetTitle, { color: colors.text }]}>Add to {ws.name}</Text>
             <View style={[styles.amountRow, { backgroundColor: colors.input, borderColor: colors.border }]}>
               <Text style={[styles.rupee, { color: colors.text }]}>₹</Text>
-              <TextInput
-                style={[styles.amountInput, { color: colors.text }]}
-                placeholder="0"
-                placeholderTextColor={colors.mutedForeground}
-                keyboardType="numeric"
-                value={fundAmount}
-                onChangeText={setFundAmount}
-                autoFocus
-              />
+              <TextInput style={[styles.amountInput, { color: colors.text }]} placeholder="0" placeholderTextColor={colors.mutedForeground} keyboardType="numeric" value={fundAmount} onChangeText={setFundAmount} autoFocus />
             </View>
             <View style={styles.quickAmounts}>
               {[500, 1000, 2000, 5000].map((q) => (
@@ -759,11 +680,7 @@ export default function WalletScreen() {
               <Pressable style={[styles.sheetBtn, { backgroundColor: colors.secondary }]} onPress={() => setShowAddFunds(false)}>
                 <Text style={[styles.sheetBtnText, { color: colors.text }]}>Cancel</Text>
               </Pressable>
-              <Pressable
-                style={[styles.sheetBtn, { backgroundColor: colors.success, flex: 1.5, opacity: !fundAmount || saving ? 0.5 : 1 }]}
-                onPress={handleAddFunds}
-                disabled={!fundAmount || saving}
-              >
+              <Pressable style={[styles.sheetBtn, { backgroundColor: colors.success, flex: 1.5, opacity: !fundAmount || saving ? 0.5 : 1 }]} onPress={handleAddFunds} disabled={!fundAmount || saving}>
                 <Text style={[styles.sheetBtnText, { color: "#fff" }]}>{saving ? "Adding..." : "Add Funds"}</Text>
               </Pressable>
             </View>
@@ -771,105 +688,247 @@ export default function WalletScreen() {
         </View>
       </Modal>
 
-      {/* ─── Spend Modal ────────────────────────────────────────────────────── */}
-      <Modal visible={showSpend} transparent animationType="slide">
+      {/* ═══════════════════════ PAY HUB MODAL ═══════════════════════════════ */}
+      <Modal visible={showPayHub} transparent animationType="slide">
         <View style={styles.overlay}>
-          <View style={[styles.sheet, { backgroundColor: colors.card }]}>
+          <View style={[styles.paySheet, { backgroundColor: colors.card }]}>
             <View style={[styles.handle, { backgroundColor: colors.border }]} />
-            <Text style={[styles.sheetTitle, { color: colors.text }]}>Spend from Wallet</Text>
-            <View style={[styles.amountRow, { backgroundColor: colors.input, borderColor: colors.border }]}>
-              <Text style={[styles.rupee, { color: colors.text }]}>₹</Text>
-              <TextInput
-                style={[styles.amountInput, { color: colors.text }]}
-                placeholder="Amount"
-                placeholderTextColor={colors.mutedForeground}
-                keyboardType="numeric"
-                value={spendAmount}
-                onChangeText={setSpendAmount}
-                autoFocus
-              />
-            </View>
-            <TextInput
-              style={[styles.noteInput, { backgroundColor: colors.input, color: colors.text, borderColor: colors.border }]}
-              placeholder="What's this for?"
-              placeholderTextColor={colors.mutedForeground}
-              value={spendDesc}
-              onChangeText={setSpendDesc}
-            />
-            <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>Category</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-              {CATEGORIES.map((c) => (
-                <Pressable
-                  key={c}
-                  style={[styles.catSelectBtn, {
-                    backgroundColor: spendCategory === c ? colors.primary + "22" : colors.secondary,
-                    borderColor: spendCategory === c ? colors.primary : "transparent",
-                    borderWidth: 1.5,
-                  }]}
-                  onPress={() => setSpendCategory(c)}
-                >
-                  <Text style={[styles.catSelectText, { color: spendCategory === c ? colors.primary : colors.mutedForeground }]}>{c}</Text>
+
+            {/* ── Processing / Success overlay ── */}
+            {(payProcessing || paySuccess) && (
+              <View style={[styles.payOverlay, { backgroundColor: colors.card }]}>
+                {paySuccess ? (
+                  <>
+                    <View style={[styles.payResultIcon, { backgroundColor: colors.success + "20" }]}>
+                      <Feather name="check-circle" size={40} color={colors.success} />
+                    </View>
+                    <Text style={[styles.payResultTitle, { color: colors.text }]}>Payment Successful!</Text>
+                    <Text style={[styles.payResultAmt, { color: colors.success }]}>₹{parseFloat(payAmount || "0").toLocaleString("en-IN")}</Text>
+                    <Text style={[styles.payResultSub, { color: colors.mutedForeground }]}>to {getRecipientName()}</Text>
+                  </>
+                ) : (
+                  <>
+                    <View style={[styles.payResultIcon, { backgroundColor: colors.primary + "20" }]}>
+                      <Feather name="zap" size={40} color={colors.primary} />
+                    </View>
+                    <Text style={[styles.payResultTitle, { color: colors.text }]}>Processing...</Text>
+                    <Text style={[styles.payResultSub, { color: colors.mutedForeground }]}>Deducting from {ws.name}</Text>
+                  </>
+                )}
+              </View>
+            )}
+
+            {/* ── Method selector ── */}
+            {!payMethod && !payProcessing && !paySuccess && (
+              <>
+                <View style={styles.payHubHeader}>
+                  <Text style={[styles.sheetTitle, { color: colors.text }]}>Pay from Wallet</Text>
+                  <View style={[styles.walletBalBadge, { backgroundColor: colors.primary + "18" }]}>
+                    <Text style={[styles.walletBalText, { color: colors.primary }]}>₹{group.walletBalance.toLocaleString("en-IN")} available</Text>
+                  </View>
+                </View>
+                <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>Choose payment method</Text>
+                <View style={styles.methodGrid}>
+                  {PAY_METHODS.map((m) => (
+                    <Pressable
+                      key={m.id}
+                      style={[styles.methodCard, { backgroundColor: colors.secondary, borderColor: m.color + "44" }]}
+                      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setPayMethod(m.id); }}
+                    >
+                      <View style={[styles.methodIcon, { backgroundColor: m.color + "20" }]}>
+                        {m.iconLib === "mci"
+                          ? <MaterialCommunityIcons name={m.icon as any} size={24} color={m.color} />
+                          : <Feather name={m.icon as any} size={24} color={m.color} />
+                        }
+                      </View>
+                      <Text style={[styles.methodLabel, { color: colors.text }]}>{m.label}</Text>
+                      <Text style={[styles.methodDesc, { color: colors.mutedForeground }]}>{m.desc}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Pressable style={[styles.sheetBtn, { backgroundColor: colors.secondary }]} onPress={() => setShowPayHub(false)}>
+                  <Text style={[styles.sheetBtnText, { color: colors.text }]}>Cancel</Text>
                 </Pressable>
-              ))}
-            </ScrollView>
-            {myWalletMember?.spendingLimit ? (
-              <Text style={[styles.limitNote, { color: colors.warning }]}>
-                Your limit: ₹{myWalletMember.spendingLimit.toLocaleString("en-IN")} per transaction
-              </Text>
-            ) : null}
-            <View style={styles.sheetActions}>
-              <Pressable style={[styles.sheetBtn, { backgroundColor: colors.secondary }]} onPress={() => setShowSpend(false)}>
-                <Text style={[styles.sheetBtnText, { color: colors.text }]}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5, opacity: (!spendAmount || !spendDesc || saving) ? 0.5 : 1 }]}
-                onPress={handleSpend}
-                disabled={!spendAmount || !spendDesc || saving}
-              >
-                <Text style={[styles.sheetBtnText, { color: "#fff" }]}>{saving ? "Processing..." : "Confirm Spend"}</Text>
-              </Pressable>
-            </View>
+              </>
+            )}
+
+            {/* ── Payment input form ── */}
+            {payMethod && !payProcessing && !paySuccess && (
+              <>
+                <View style={styles.payFormHeader}>
+                  <Pressable style={[styles.backChip, { backgroundColor: colors.secondary }]} onPress={() => { setPayMethod(null); setQrScanned(false); setQrInfo(null); }}>
+                    <Feather name="arrow-left" size={14} color={colors.text} />
+                  </Pressable>
+                  <View style={[styles.methodBadge, { backgroundColor: selectedMethodMeta!.color + "20" }]}>
+                    {selectedMethodMeta!.iconLib === "mci"
+                      ? <MaterialCommunityIcons name={selectedMethodMeta!.icon as any} size={16} color={selectedMethodMeta!.color} />
+                      : <Feather name={selectedMethodMeta!.icon as any} size={16} color={selectedMethodMeta!.color} />
+                    }
+                    <Text style={[styles.methodBadgeText, { color: selectedMethodMeta!.color }]}>{selectedMethodMeta!.label}</Text>
+                  </View>
+                </View>
+
+                {/* QR Scanner */}
+                {payMethod === "qr" && (
+                  <View style={{ gap: 12 }}>
+                    {!qrScanned ? (
+                      <Pressable style={[styles.qrBox, { backgroundColor: colors.secondary, borderColor: colors.primary + "44" }]} onPress={simulateQRScan}>
+                        <MaterialCommunityIcons name="qr-code-scanner" size={56} color={colors.primary} />
+                        <Text style={[styles.qrBoxLabel, { color: colors.text }]}>Tap to Scan QR Code</Text>
+                        <Text style={[styles.qrBoxSub, { color: colors.mutedForeground }]}>Supports PhonePe, GPay, Paytm, BHIM & all UPI</Text>
+                      </Pressable>
+                    ) : (
+                      <View style={[styles.qrResult, { backgroundColor: colors.success + "14", borderColor: colors.success + "33" }]}>
+                        <Feather name="check-circle" size={20} color={colors.success} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.qrResultName, { color: colors.text }]}>{qrInfo?.name}</Text>
+                          <Text style={[styles.qrResultUPI, { color: colors.mutedForeground }]}>{qrInfo?.upi}</Text>
+                        </View>
+                        <Pressable onPress={() => { setQrScanned(false); setQrInfo(null); }}>
+                          <Feather name="refresh-cw" size={16} color={colors.primary} />
+                        </Pressable>
+                      </View>
+                    )}
+                  </View>
+                )}
+
+                {/* Phone Number */}
+                {payMethod === "phone" && (
+                  <View style={[styles.inputRow, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+                    <Text style={[styles.inputPrefix, { color: colors.mutedForeground }]}>+91</Text>
+                    <TextInput style={[styles.inputField, { color: colors.text }]} placeholder="10-digit mobile number" placeholderTextColor={colors.mutedForeground} keyboardType="phone-pad" maxLength={10} value={payPhone} onChangeText={setPayPhone} autoFocus />
+                    {payPhone.length === 10 && <Feather name="check-circle" size={16} color={colors.success} />}
+                  </View>
+                )}
+
+                {/* UPI ID */}
+                {payMethod === "upi" && (
+                  <View style={[styles.inputRow, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+                    <Feather name="at-sign" size={16} color={colors.mutedForeground} />
+                    <TextInput style={[styles.inputField, { color: colors.text }]} placeholder="yourname@upi" placeholderTextColor={colors.mutedForeground} autoCapitalize="none" keyboardType="email-address" value={payUPI} onChangeText={setPayUPI} autoFocus />
+                    {payUPI.includes("@") && <Feather name="check-circle" size={16} color={colors.success} />}
+                  </View>
+                )}
+
+                {/* Bank Transfer */}
+                {payMethod === "bank" && (
+                  <View style={{ gap: 10 }}>
+                    <View style={[styles.inputRow, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+                      <Feather name="hash" size={16} color={colors.mutedForeground} />
+                      <TextInput style={[styles.inputField, { color: colors.text }]} placeholder="Account number" placeholderTextColor={colors.mutedForeground} keyboardType="numeric" value={payBankAcc} onChangeText={setPayBankAcc} autoFocus />
+                    </View>
+                    <View style={[styles.inputRow, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+                      <Feather name="code" size={16} color={colors.mutedForeground} />
+                      <TextInput style={[styles.inputField, { color: colors.text }]} placeholder="IFSC Code (e.g. SBIN0001234)" placeholderTextColor={colors.mutedForeground} autoCapitalize="characters" maxLength={11} value={payBankIFSC} onChangeText={setPayBankIFSC} />
+                    </View>
+                    {payBankAcc.length >= 9 && payBankIFSC.length === 11 && (
+                      <View style={[styles.verifiedRow, { backgroundColor: colors.success + "14" }]}>
+                        <Feather name="check-circle" size={14} color={colors.success} />
+                        <Text style={[styles.verifiedText, { color: colors.success }]}>Bank details look valid</Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+
+                {/* Group Member Contact */}
+                {payMethod === "contact" && (
+                  <ScrollView style={{ maxHeight: 180 }} showsVerticalScrollIndicator={false}>
+                    {group.members.filter((m) => m.id !== "me").map((m) => (
+                      <Pressable
+                        key={m.id}
+                        style={[styles.contactRow, {
+                          backgroundColor: payContact?.id === m.id ? colors.primary + "14" : colors.secondary,
+                          borderColor: payContact?.id === m.id ? colors.primary : "transparent",
+                        }]}
+                        onPress={() => setPayContact({ id: m.id, name: m.name })}
+                      >
+                        <View style={[styles.contactAvatar, { backgroundColor: m.color + "22" }]}>
+                          <Text style={[styles.contactInitials, { color: m.color }]}>{m.initials}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.contactName, { color: colors.text }]}>{m.name}</Text>
+                          <Text style={[styles.contactPhone, { color: colors.mutedForeground }]}>+91 {m.phone || "—"}</Text>
+                        </View>
+                        {payContact?.id === m.id && <Feather name="check-circle" size={18} color={colors.primary} />}
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                )}
+
+                {/* Amount + Note (common) */}
+                <View style={[styles.amountRow, { backgroundColor: colors.input, borderColor: colors.border }]}>
+                  <Text style={[styles.rupee, { color: colors.text }]}>₹</Text>
+                  <TextInput style={[styles.amountInput, { color: colors.text }]} placeholder="Amount" placeholderTextColor={colors.mutedForeground} keyboardType="numeric" value={payAmount} onChangeText={setPayAmount} />
+                </View>
+                <View style={styles.quickAmounts}>
+                  {[100, 500, 1000, 2000].map((q) => (
+                    <Pressable key={q} style={[styles.quickBtn, { backgroundColor: colors.accent }]} onPress={() => setPayAmount(q.toString())}>
+                      <Text style={[styles.quickBtnText, { color: colors.text }]}>₹{q}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <TextInput
+                  style={[styles.noteInput, { backgroundColor: colors.input, color: colors.text, borderColor: colors.border }]}
+                  placeholder="Add a note (optional)"
+                  placeholderTextColor={colors.mutedForeground}
+                  value={payNote}
+                  onChangeText={setPayNote}
+                />
+                <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>Category</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                  {CATEGORIES.map((c) => (
+                    <Pressable key={c} style={[styles.catSelectBtn, { backgroundColor: payCategory === c ? colors.primary + "22" : colors.secondary, borderColor: payCategory === c ? colors.primary : "transparent", borderWidth: 1.5 }]} onPress={() => setPayCategory(c)}>
+                      <Text style={[styles.catSelectText, { color: payCategory === c ? colors.primary : colors.mutedForeground }]}>{c}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+                {myWalletMember?.spendingLimit ? (
+                  <Text style={[styles.limitNote, { color: colors.warning }]}>Your limit: ₹{myWalletMember.spendingLimit.toLocaleString("en-IN")} per transaction</Text>
+                ) : null}
+                <View style={styles.sheetActions}>
+                  <Pressable style={[styles.sheetBtn, { backgroundColor: colors.secondary }]} onPress={() => setShowPayHub(false)}>
+                    <Text style={[styles.sheetBtnText, { color: colors.text }]}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5, opacity: (!payAmount || !isRecipientValid()) ? 0.4 : 1 }]}
+                    onPress={handleWalletPay}
+                    disabled={!payAmount || !isRecipientValid() || payProcessing}
+                  >
+                    <Feather name="zap" size={16} color="#fff" />
+                    <Text style={[styles.sheetBtnText, { color: "#fff" }]}>Pay ₹{payAmount || "0"}</Text>
+                  </Pressable>
+                </View>
+              </>
+            )}
           </View>
         </View>
       </Modal>
 
-      {/* ─── Post-Spend Split Modal ──────────────────────────────────────────── */}
+      {/* ═══════════════════════ POST-SPEND SPLIT MODAL ══════════════════════ */}
       <Modal visible={showSplitModal} transparent animationType="slide">
         <View style={styles.overlay}>
           <View style={[styles.splitSheet, { backgroundColor: colors.card }]}>
             <View style={[styles.handle, { backgroundColor: colors.border }]} />
 
-            {/* ── Step 1: Ask ── */}
             {splitStep === "ask" && (
               <>
                 <View style={[styles.splitSuccessIcon, { backgroundColor: colors.success + "20" }]}>
                   <Feather name="check-circle" size={32} color={colors.success} />
                 </View>
                 <Text style={[styles.splitAskTitle, { color: colors.text }]}>Payment Successful!</Text>
-                <Text style={[styles.splitAskAmount, { color: colors.success }]}>
-                  ₹{lastSpend?.amount.toLocaleString("en-IN")} spent from {ws.name}
-                </Text>
-                <Text style={[styles.splitAskSubtitle, { color: colors.mutedForeground }]}>
-                  "{lastSpend?.description}"
-                </Text>
+                <Text style={[styles.splitAskAmount, { color: colors.success }]}>₹{lastSpend?.amount.toLocaleString("en-IN")}</Text>
+                <Text style={[styles.splitAskSubtitle, { color: colors.mutedForeground }]}>"{lastSpend?.description}"</Text>
                 <View style={[styles.splitPromptCard, { backgroundColor: colors.primary + "14", borderColor: colors.primary + "33" }]}>
                   <Feather name="users" size={20} color={colors.primary} />
                   <Text style={[styles.splitPromptText, { color: colors.text }]}>
-                    Split this expense among{" "}
-                    <Text style={{ color: colors.primary, fontFamily: "Inter_700Bold" }}>{group.name}</Text> members?
+                    Split this expense among <Text style={{ color: colors.primary, fontFamily: "Inter_700Bold" }}>{group.name}</Text> members?
                   </Text>
                 </View>
                 <View style={styles.sheetActions}>
-                  <Pressable
-                    style={[styles.sheetBtn, { backgroundColor: colors.secondary }]}
-                    onPress={() => setShowSplitModal(false)}
-                  >
+                  <Pressable style={[styles.sheetBtn, { backgroundColor: colors.secondary }]} onPress={() => setShowSplitModal(false)}>
                     <Text style={[styles.sheetBtnText, { color: colors.text }]}>Skip</Text>
                   </Pressable>
-                  <Pressable
-                    style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5 }]}
-                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSplitStep("choose_type"); }}
-                  >
+                  <Pressable style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5 }]} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSplitStep("choose_type"); }}>
                     <Feather name="divide-circle" size={16} color="#fff" />
                     <Text style={[styles.sheetBtnText, { color: "#fff" }]}>Yes, Split!</Text>
                   </Pressable>
@@ -877,200 +936,96 @@ export default function WalletScreen() {
               </>
             )}
 
-            {/* ── Step 2: Choose split type ── */}
             {splitStep === "choose_type" && (
               <>
                 <Text style={[styles.splitStepTitle, { color: colors.text }]}>How to split?</Text>
-                <Text style={[styles.splitStepSub, { color: colors.mutedForeground }]}>
-                  ₹{lastSpend?.amount.toLocaleString("en-IN")} · "{lastSpend?.description}"
-                </Text>
-
-                <Text style={[styles.fieldLabel, { color: colors.mutedForeground, marginTop: 4 }]}>Select members to include</Text>
+                <Text style={[styles.splitStepSub, { color: colors.mutedForeground }]}>₹{lastSpend?.amount.toLocaleString("en-IN")} · "{lastSpend?.description}"</Text>
+                <Text style={[styles.fieldLabel, { color: colors.mutedForeground, marginTop: 4 }]}>Select members</Text>
                 <ScrollView style={{ maxHeight: 160 }} showsVerticalScrollIndicator={false}>
                   {group.members.map((m) => {
                     const selected = selectedMembers.includes(m.id);
                     return (
-                      <Pressable
-                        key={m.id}
-                        style={[styles.memberSelectRow, { borderBottomColor: colors.border }]}
-                        onPress={() => toggleMember(m.id)}
-                      >
-                        <View style={[styles.memberSelectAvatar, { backgroundColor: m.color + "22" }]}>
-                          <Text style={[styles.memberSelectInitials, { color: m.color }]}>{m.initials}</Text>
-                        </View>
+                      <Pressable key={m.id} style={[styles.memberSelectRow, { borderBottomColor: colors.border }]} onPress={() => toggleMember(m.id)}>
+                        <View style={[styles.memberSelectAvatar, { backgroundColor: m.color + "22" }]}><Text style={[styles.memberSelectInitials, { color: m.color }]}>{m.initials}</Text></View>
                         <Text style={[styles.memberSelectName, { color: colors.text }]}>{m.id === "me" ? "You" : m.name}</Text>
-                        <View style={[styles.checkBox, {
-                          backgroundColor: selected ? colors.primary : "transparent",
-                          borderColor: selected ? colors.primary : colors.border,
-                        }]}>
+                        <View style={[styles.checkBox, { backgroundColor: selected ? colors.primary : "transparent", borderColor: selected ? colors.primary : colors.border }]}>
                           {selected && <Feather name="check" size={12} color="#fff" />}
                         </View>
                       </Pressable>
                     );
                   })}
                 </ScrollView>
-
                 <View style={styles.splitTypeRow}>
-                  <Pressable
-                    style={[styles.splitTypeCard, {
-                      backgroundColor: splitType === "equal" ? colors.primary : colors.secondary,
-                      borderColor: splitType === "equal" ? colors.primary : colors.border,
-                    }]}
-                    onPress={() => setSplitType("equal")}
-                  >
-                    <Feather name="divide-circle" size={22} color={splitType === "equal" ? "#fff" : colors.mutedForeground} />
-                    <Text style={[styles.splitTypeLabel, { color: splitType === "equal" ? "#fff" : colors.text }]}>Equal Split</Text>
-                    {selectedMembers.length > 0 && (
-                      <Text style={[styles.splitTypeHint, { color: splitType === "equal" ? "rgba(255,255,255,0.75)" : colors.mutedForeground }]}>
-                        ₹{(lastSpend ? lastSpend.amount / selectedMembers.length : 0).toFixed(0)} each
-                      </Text>
-                    )}
-                  </Pressable>
-                  <Pressable
-                    style={[styles.splitTypeCard, {
-                      backgroundColor: splitType === "unequal" ? colors.primary : colors.secondary,
-                      borderColor: splitType === "unequal" ? colors.primary : colors.border,
-                    }]}
-                    onPress={() => setSplitType("unequal")}
-                  >
-                    <Feather name="sliders" size={22} color={splitType === "unequal" ? "#fff" : colors.mutedForeground} />
-                    <Text style={[styles.splitTypeLabel, { color: splitType === "unequal" ? "#fff" : colors.text }]}>Custom Split</Text>
-                    <Text style={[styles.splitTypeHint, { color: splitType === "unequal" ? "rgba(255,255,255,0.75)" : colors.mutedForeground }]}>
-                      Set each person's share
-                    </Text>
-                  </Pressable>
+                  {([{ id: "equal", icon: "divide-circle", label: "Equal", hint: selectedMembers.length > 0 ? `₹${(lastSpend ? lastSpend.amount / selectedMembers.length : 0).toFixed(0)} each` : "—" }, { id: "unequal", icon: "sliders", label: "Custom", hint: "Set each person's share" }] as const).map((t) => (
+                    <Pressable key={t.id} style={[styles.splitTypeCard, { backgroundColor: splitType === t.id ? colors.primary : colors.secondary, borderColor: splitType === t.id ? colors.primary : colors.border }]} onPress={() => setSplitType(t.id)}>
+                      <Feather name={t.icon} size={22} color={splitType === t.id ? "#fff" : colors.mutedForeground} />
+                      <Text style={[styles.splitTypeLabel, { color: splitType === t.id ? "#fff" : colors.text }]}>{t.label}</Text>
+                      <Text style={[styles.splitTypeHint, { color: splitType === t.id ? "rgba(255,255,255,0.75)" : colors.mutedForeground }]}>{t.hint}</Text>
+                    </Pressable>
+                  ))}
                 </View>
-
                 <View style={styles.sheetActions}>
-                  <Pressable
-                    style={[styles.sheetBtn, { backgroundColor: colors.secondary }]}
-                    onPress={() => setSplitStep("ask")}
-                  >
-                    <Text style={[styles.sheetBtnText, { color: colors.text }]}>Back</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5, opacity: selectedMembers.length === 0 ? 0.4 : 1 }]}
-                    disabled={selectedMembers.length === 0}
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      if (splitType === "unequal") {
-                        setSplitStep("unequal_input");
-                      } else {
-                        setSplitStep("confirm");
-                      }
-                    }}
-                  >
+                  <Pressable style={[styles.sheetBtn, { backgroundColor: colors.secondary }]} onPress={() => setSplitStep("ask")}><Text style={[styles.sheetBtnText, { color: colors.text }]}>Back</Text></Pressable>
+                  <Pressable style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5, opacity: selectedMembers.length === 0 ? 0.4 : 1 }]} disabled={selectedMembers.length === 0} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSplitStep(splitType === "unequal" ? "unequal_input" : "confirm"); }}>
                     <Text style={[styles.sheetBtnText, { color: "#fff" }]}>Next →</Text>
                   </Pressable>
                 </View>
               </>
             )}
 
-            {/* ── Step 3a: Unequal custom input ── */}
             {splitStep === "unequal_input" && (
               <>
                 <Text style={[styles.splitStepTitle, { color: colors.text }]}>Enter each person's share</Text>
-                <Text style={[styles.splitStepSub, { color: colors.mutedForeground }]}>
-                  Total: ₹{lastSpend?.amount.toLocaleString("en-IN")}
-                </Text>
+                <Text style={[styles.splitStepSub, { color: colors.mutedForeground }]}>Total: ₹{lastSpend?.amount.toLocaleString("en-IN")}</Text>
                 <ScrollView style={{ maxHeight: 260 }} showsVerticalScrollIndicator={false}>
                   {group.members.filter((m) => selectedMembers.includes(m.id)).map((m) => (
                     <View key={m.id} style={[styles.unequalRow, { borderBottomColor: colors.border }]}>
-                      <View style={[styles.memberSelectAvatar, { backgroundColor: m.color + "22" }]}>
-                        <Text style={[styles.memberSelectInitials, { color: m.color }]}>{m.initials}</Text>
-                      </View>
+                      <View style={[styles.memberSelectAvatar, { backgroundColor: m.color + "22" }]}><Text style={[styles.memberSelectInitials, { color: m.color }]}>{m.initials}</Text></View>
                       <Text style={[styles.unequalName, { color: colors.text }]}>{m.id === "me" ? "You" : m.name}</Text>
                       <View style={[styles.unequalInputWrap, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
                         <Text style={[styles.unequalRupee, { color: colors.mutedForeground }]}>₹</Text>
-                        <TextInput
-                          style={[styles.unequalInput, { color: colors.text }]}
-                          keyboardType="numeric"
-                          placeholder="0"
-                          placeholderTextColor={colors.mutedForeground}
-                          value={customSplits[m.id] ?? ""}
-                          onChangeText={(v) => setCustomSplits((prev) => ({ ...prev, [m.id]: v }))}
-                        />
+                        <TextInput style={[styles.unequalInput, { color: colors.text }]} keyboardType="numeric" placeholder="0" placeholderTextColor={colors.mutedForeground} value={customSplits[m.id] ?? ""} onChangeText={(v) => setCustomSplits((prev) => ({ ...prev, [m.id]: v }))} />
                       </View>
                     </View>
                   ))}
                 </ScrollView>
-                <View style={[styles.remainingRow, {
-                  backgroundColor: Math.abs(customRemaining) < 0.5 ? colors.success + "18" : colors.warning + "18",
-                }]}>
-                  <Text style={[styles.remainingLabel, { color: colors.mutedForeground }]}>Remaining unassigned:</Text>
-                  <Text style={[styles.remainingAmt, { color: Math.abs(customRemaining) < 0.5 ? colors.success : colors.warning }]}>
-                    ₹{customRemaining.toFixed(2)}
-                  </Text>
+                <View style={[styles.remainingRow, { backgroundColor: Math.abs(customRemaining) < 0.5 ? colors.success + "18" : colors.warning + "18" }]}>
+                  <Text style={[styles.remainingLabel, { color: colors.mutedForeground }]}>Remaining:</Text>
+                  <Text style={[styles.remainingAmt, { color: Math.abs(customRemaining) < 0.5 ? colors.success : colors.warning }]}>₹{customRemaining.toFixed(2)}</Text>
                 </View>
                 <View style={styles.sheetActions}>
-                  <Pressable
-                    style={[styles.sheetBtn, { backgroundColor: colors.secondary }]}
-                    onPress={() => setSplitStep("choose_type")}
-                  >
-                    <Text style={[styles.sheetBtnText, { color: colors.text }]}>Back</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5, opacity: Math.abs(customRemaining) > 0.5 ? 0.4 : 1 }]}
-                    disabled={Math.abs(customRemaining) > 0.5}
-                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSplitStep("confirm"); }}
-                  >
+                  <Pressable style={[styles.sheetBtn, { backgroundColor: colors.secondary }]} onPress={() => setSplitStep("choose_type")}><Text style={[styles.sheetBtnText, { color: colors.text }]}>Back</Text></Pressable>
+                  <Pressable style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5, opacity: Math.abs(customRemaining) > 0.5 ? 0.4 : 1 }]} disabled={Math.abs(customRemaining) > 0.5} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSplitStep("confirm"); }}>
                     <Text style={[styles.sheetBtnText, { color: "#fff" }]}>Review →</Text>
                   </Pressable>
                 </View>
               </>
             )}
 
-            {/* ── Step 4: Confirm ── */}
             {splitStep === "confirm" && (
               <>
                 <Text style={[styles.splitStepTitle, { color: colors.text }]}>Confirm Split</Text>
-                <Text style={[styles.splitStepSub, { color: colors.mutedForeground }]}>
-                  "{lastSpend?.description}" · ₹{lastSpend?.amount.toLocaleString("en-IN")}
-                </Text>
+                <Text style={[styles.splitStepSub, { color: colors.mutedForeground }]}>"{lastSpend?.description}" · ₹{lastSpend?.amount.toLocaleString("en-IN")}</Text>
                 <View style={[styles.splitSummaryCard, { backgroundColor: colors.accent }]}>
-                  <View style={styles.splitSummaryRow}>
-                    <Text style={[styles.splitSummaryLabel, { color: colors.mutedForeground }]}>Split type</Text>
-                    <Text style={[styles.splitSummaryVal, { color: colors.primary }]}>
-                      {splitType === "equal" ? "Equal" : "Custom"}
-                    </Text>
-                  </View>
-                  <View style={styles.splitSummaryRow}>
-                    <Text style={[styles.splitSummaryLabel, { color: colors.mutedForeground }]}>Members</Text>
-                    <Text style={[styles.splitSummaryVal, { color: colors.text }]}>{selectedMembers.length} people</Text>
-                  </View>
+                  <View style={styles.splitSummaryRow}><Text style={[styles.splitSummaryLabel, { color: colors.mutedForeground }]}>Split type</Text><Text style={[styles.splitSummaryVal, { color: colors.primary }]}>{splitType === "equal" ? "Equal" : "Custom"}</Text></View>
+                  <View style={styles.splitSummaryRow}><Text style={[styles.splitSummaryLabel, { color: colors.mutedForeground }]}>Members</Text><Text style={[styles.splitSummaryVal, { color: colors.text }]}>{selectedMembers.length} people</Text></View>
                 </View>
                 <ScrollView style={{ maxHeight: 200 }} showsVerticalScrollIndicator={false}>
                   {group.members.filter((m) => selectedMembers.includes(m.id)).map((m) => {
                     const share = splitType === "equal" ? equalShare : (parseFloat(customSplits[m.id]) || 0);
                     return (
                       <View key={m.id} style={[styles.confirmRow, { borderBottomColor: colors.border }]}>
-                        <View style={[styles.memberSelectAvatar, { backgroundColor: m.color + "22" }]}>
-                          <Text style={[styles.memberSelectInitials, { color: m.color }]}>{m.initials}</Text>
-                        </View>
+                        <View style={[styles.memberSelectAvatar, { backgroundColor: m.color + "22" }]}><Text style={[styles.memberSelectInitials, { color: m.color }]}>{m.initials}</Text></View>
                         <Text style={[styles.confirmName, { color: colors.text }]}>{m.id === "me" ? "You" : m.name}</Text>
                         <Text style={[styles.confirmShare, { color: colors.primary }]}>₹{share.toFixed(2)}</Text>
-                        {m.id !== "me" && (
-                          <View style={[styles.notifyPill, { backgroundColor: colors.primary + "18" }]}>
-                            <Feather name="bell" size={10} color={colors.primary} />
-                            <Text style={[styles.notifyPillText, { color: colors.primary }]}>Notified</Text>
-                          </View>
-                        )}
+                        {m.id !== "me" && <View style={[styles.notifyPill, { backgroundColor: colors.primary + "18" }]}><Feather name="bell" size={10} color={colors.primary} /><Text style={[styles.notifyPillText, { color: colors.primary }]}>Notified</Text></View>}
                       </View>
                     );
                   })}
                 </ScrollView>
                 <View style={styles.sheetActions}>
-                  <Pressable
-                    style={[styles.sheetBtn, { backgroundColor: colors.secondary }]}
-                    onPress={() => setSplitStep(splitType === "equal" ? "choose_type" : "unequal_input")}
-                  >
-                    <Text style={[styles.sheetBtnText, { color: colors.text }]}>Back</Text>
-                  </Pressable>
-                  <Pressable
-                    style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5, opacity: saving ? 0.6 : 1 }]}
-                    onPress={confirmSplit}
-                    disabled={saving}
-                  >
+                  <Pressable style={[styles.sheetBtn, { backgroundColor: colors.secondary }]} onPress={() => setSplitStep(splitType === "equal" ? "choose_type" : "unequal_input")}><Text style={[styles.sheetBtnText, { color: colors.text }]}>Back</Text></Pressable>
+                  <Pressable style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5, opacity: saving ? 0.6 : 1 }]} onPress={confirmSplit} disabled={saving}>
                     <Feather name="check" size={16} color="#fff" />
                     <Text style={[styles.sheetBtnText, { color: "#fff" }]}>{saving ? "Saving..." : "Record Split"}</Text>
                   </Pressable>
@@ -1081,57 +1036,29 @@ export default function WalletScreen() {
         </View>
       </Modal>
 
-      {/* ─── Edit Member Modal ───────────────────────────────────────────────── */}
+      {/* ═══════════════════════ EDIT MEMBER MODAL ════════════════════════════ */}
       <Modal visible={!!showEditMember} transparent animationType="slide">
         <View style={styles.overlay}>
           <View style={[styles.sheet, { backgroundColor: colors.card }]}>
             <View style={[styles.handle, { backgroundColor: colors.border }]} />
-            <Text style={[styles.sheetTitle, { color: colors.text }]}>
-              {group.members.find((m) => m.id === showEditMember?.userId)?.name ?? "Member"} Limits
-            </Text>
+            <Text style={[styles.sheetTitle, { color: colors.text }]}>{group.members.find((m) => m.id === showEditMember?.userId)?.name ?? "Member"} Limits</Text>
             <View style={styles.settingRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.settingLabel, { color: colors.text }]}>Role</Text>
-                <Text style={[styles.settingHint, { color: colors.mutedForeground }]}>Toggle admin access</Text>
-              </View>
-              <Pressable
-                style={[styles.roleSwitchBtn, { backgroundColor: showEditMember?.role === "admin" ? colors.primary + "22" : colors.success + "18" }]}
-                onPress={() => showEditMember && handleRoleToggle(showEditMember.userId, showEditMember.role)}
-              >
-                <Text style={[styles.roleSwitchText, { color: showEditMember?.role === "admin" ? colors.primary : colors.success }]}>
-                  {showEditMember?.role === "admin" ? "Admin" : "Member"}
-                </Text>
+              <View style={{ flex: 1 }}><Text style={[styles.settingLabel, { color: colors.text }]}>Role</Text><Text style={[styles.settingHint, { color: colors.mutedForeground }]}>Toggle admin access</Text></View>
+              <Pressable style={[styles.roleSwitchBtn, { backgroundColor: showEditMember?.role === "admin" ? colors.primary + "22" : colors.success + "18" }]} onPress={() => showEditMember && handleRoleToggle(showEditMember.userId, showEditMember.role)}>
+                <Text style={[styles.roleSwitchText, { color: showEditMember?.role === "admin" ? colors.primary : colors.success }]}>{showEditMember?.role === "admin" ? "Admin" : "Member"}</Text>
               </Pressable>
             </View>
             <View style={styles.settingRow}>
               <Text style={[styles.settingLabel, { color: colors.text }]}>Per-transaction limit (₹)</Text>
-              <TextInput
-                style={[styles.settingInputSm, { color: colors.text, backgroundColor: colors.secondary, borderColor: colors.border }]}
-                value={editSpendLimit}
-                onChangeText={setEditSpendLimit}
-                keyboardType="numeric"
-                placeholder="0 = unlimited"
-                placeholderTextColor={colors.mutedForeground}
-              />
+              <TextInput style={[styles.settingInputSm, { color: colors.text, backgroundColor: colors.secondary, borderColor: colors.border }]} value={editSpendLimit} onChangeText={setEditSpendLimit} keyboardType="numeric" placeholder="0 = unlimited" placeholderTextColor={colors.mutedForeground} />
             </View>
             <View style={styles.settingRow}>
               <Text style={[styles.settingLabel, { color: colors.text }]}>Daily limit (₹)</Text>
-              <TextInput
-                style={[styles.settingInputSm, { color: colors.text, backgroundColor: colors.secondary, borderColor: colors.border }]}
-                value={editDailyLimit}
-                onChangeText={setEditDailyLimit}
-                keyboardType="numeric"
-                placeholder="0 = unlimited"
-                placeholderTextColor={colors.mutedForeground}
-              />
+              <TextInput style={[styles.settingInputSm, { color: colors.text, backgroundColor: colors.secondary, borderColor: colors.border }]} value={editDailyLimit} onChangeText={setEditDailyLimit} keyboardType="numeric" placeholder="0 = unlimited" placeholderTextColor={colors.mutedForeground} />
             </View>
             <View style={styles.sheetActions}>
-              <Pressable style={[styles.sheetBtn, { backgroundColor: colors.secondary }]} onPress={() => setShowEditMember(null)}>
-                <Text style={[styles.sheetBtnText, { color: colors.text }]}>Cancel</Text>
-              </Pressable>
-              <Pressable style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5 }]} onPress={handleSaveMember}>
-                <Text style={[styles.sheetBtnText, { color: "#fff" }]}>Save Changes</Text>
-              </Pressable>
+              <Pressable style={[styles.sheetBtn, { backgroundColor: colors.secondary }]} onPress={() => setShowEditMember(null)}><Text style={[styles.sheetBtnText, { color: colors.text }]}>Cancel</Text></Pressable>
+              <Pressable style={[styles.sheetBtn, { backgroundColor: colors.primary, flex: 1.5 }]} onPress={handleSaveMember}><Text style={[styles.sheetBtnText, { color: "#fff" }]}>Save Changes</Text></Pressable>
             </View>
           </View>
         </View>
@@ -1152,10 +1079,9 @@ const styles = StyleSheet.create({
   headerActions: { flexDirection: "row", gap: 8 },
   headerBtn: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
   headerBtnText: { fontSize: 12, fontFamily: "Inter_700Bold" },
-  balanceHero: { marginHorizontal: 16, borderRadius: 20, padding: 24, gap: 10, marginBottom: 4 },
+  balanceHero: { marginHorizontal: 16, borderRadius: 20, padding: 24, gap: 8, marginBottom: 4 },
   heroLabel: { fontSize: 11, fontFamily: "Inter_600SemiBold", letterSpacing: 1.5, textTransform: "uppercase" },
   heroBalance: { fontSize: 42, fontFamily: "Inter_700Bold" },
-  heroProgress: { gap: 6 },
   progressTrack: { height: 8, borderRadius: 4, overflow: "hidden" },
   progressFill: { height: "100%", borderRadius: 4 },
   progressLabel: { fontSize: 12, fontFamily: "Inter_400Regular" },
@@ -1169,6 +1095,11 @@ const styles = StyleSheet.create({
   tabStrip: { paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
   tabItem: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20 },
   tabItemText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  // Pay shortcuts on overview
+  payShortcutRow: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
+  payShortcut: { flex: 1, minWidth: 60, alignItems: "center", padding: 10, borderRadius: 14, gap: 6 },
+  payShortcutIcon: { width: 38, height: 38, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  payShortcutLabel: { fontSize: 10, fontFamily: "Inter_600SemiBold", textAlign: "center" },
   sectionLabel: { fontSize: 11, fontFamily: "Inter_600SemiBold", letterSpacing: 1, textTransform: "uppercase" },
   txRow: { flexDirection: "row", alignItems: "center", padding: 12, borderRadius: 12, gap: 10 },
   txIcon: { width: 38, height: 38, borderRadius: 11, alignItems: "center", justifyContent: "center" },
@@ -1237,6 +1168,7 @@ const styles = StyleSheet.create({
   overlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.6)" },
   sheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, gap: 14 },
   splitSheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, gap: 14, maxHeight: "90%" },
+  paySheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, gap: 14, maxHeight: "92%" },
   handle: { width: 40, height: 4, borderRadius: 2, alignSelf: "center" },
   sheetTitle: { fontSize: 20, fontFamily: "Inter_700Bold" },
   amountRow: { flexDirection: "row", alignItems: "center", borderRadius: 12, borderWidth: 1.5, paddingHorizontal: 14 },
@@ -1252,7 +1184,45 @@ const styles = StyleSheet.create({
   sheetActions: { flexDirection: "row", gap: 12 },
   sheetBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 14, borderRadius: 12 },
   sheetBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
-  // Split modal specific
+  // Pay Hub
+  payHubHeader: { gap: 8 },
+  walletBalBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, alignSelf: "flex-start" },
+  walletBalText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  methodGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  methodCard: { width: "47%", padding: 14, borderRadius: 16, gap: 8, borderWidth: 1.5 },
+  methodIcon: { width: 46, height: 46, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  methodLabel: { fontSize: 14, fontFamily: "Inter_700Bold" },
+  methodDesc: { fontSize: 11, fontFamily: "Inter_400Regular" },
+  payFormHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
+  backChip: { width: 32, height: 32, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  methodBadge: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
+  methodBadgeText: { fontSize: 13, fontFamily: "Inter_700Bold" },
+  // QR
+  qrBox: { alignItems: "center", padding: 28, borderRadius: 20, gap: 10, borderWidth: 2, borderStyle: "dashed" },
+  qrBoxLabel: { fontSize: 16, fontFamily: "Inter_600SemiBold" },
+  qrBoxSub: { fontSize: 12, fontFamily: "Inter_400Regular", textAlign: "center" },
+  qrResult: { flexDirection: "row", alignItems: "center", gap: 10, padding: 14, borderRadius: 14, borderWidth: 1 },
+  qrResultName: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  qrResultUPI: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2 },
+  // Input
+  inputRow: { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 12, borderWidth: 1.5, paddingHorizontal: 14, paddingVertical: 12 },
+  inputPrefix: { fontSize: 15, fontFamily: "Inter_600SemiBold" },
+  inputField: { flex: 1, fontSize: 15, fontFamily: "Inter_400Regular" },
+  verifiedRow: { flexDirection: "row", alignItems: "center", gap: 6, padding: 10, borderRadius: 10 },
+  verifiedText: { fontSize: 13, fontFamily: "Inter_500Medium" },
+  // Contact picker
+  contactRow: { flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 12, marginBottom: 8, borderWidth: 1.5 },
+  contactAvatar: { width: 38, height: 38, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  contactInitials: { fontSize: 13, fontFamily: "Inter_700Bold" },
+  contactName: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  contactPhone: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 1 },
+  // Processing overlay
+  payOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, borderTopLeftRadius: 28, borderTopRightRadius: 28, zIndex: 10, alignItems: "center", justifyContent: "center", gap: 12 },
+  payResultIcon: { width: 80, height: 80, borderRadius: 24, alignItems: "center", justifyContent: "center" },
+  payResultTitle: { fontSize: 22, fontFamily: "Inter_700Bold" },
+  payResultAmt: { fontSize: 36, fontFamily: "Inter_700Bold" },
+  payResultSub: { fontSize: 14, fontFamily: "Inter_400Regular" },
+  // Split modal
   splitSuccessIcon: { width: 64, height: 64, borderRadius: 20, alignItems: "center", justifyContent: "center", alignSelf: "center" },
   splitAskTitle: { fontSize: 22, fontFamily: "Inter_700Bold", textAlign: "center" },
   splitAskAmount: { fontSize: 26, fontFamily: "Inter_700Bold", textAlign: "center" },
